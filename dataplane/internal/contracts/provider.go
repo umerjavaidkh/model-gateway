@@ -1,0 +1,122 @@
+package contracts
+
+import (
+	"context"
+	"errors"
+	"io"
+	"testing"
+	"time"
+
+	"github.com/umerjavaidkh/model-gateway/dataplane/internal/core"
+)
+
+// ProviderFactory builds the implementation under test. It is a factory rather
+// than a single instance so the suite can assert on a freshly constructed
+// adapter where that matters.
+type ProviderFactory func(t *testing.T) core.ProviderPort
+
+// SampleCall is a call the implementation is expected to be able to serve. Each
+// adapter supplies its own, because a valid body is provider-shaped.
+type SampleCall func(t *testing.T) *core.ProviderCall
+
+// RunProviderSuite asserts the behaviour every ProviderPort must have,
+// regardless of which upstream it speaks to.
+func RunProviderSuite(t *testing.T, newPort ProviderFactory, sample SampleCall) {
+	t.Helper()
+
+	t.Run("reports a stable non-empty name", func(t *testing.T) {
+		port := newPort(t)
+		if port.Name() == "" {
+			t.Fatal("Name must be non-empty: it is the key a snapshot binds the port by")
+		}
+		if port.Name() != port.Name() {
+			t.Fatal("Name must be stable across calls")
+		}
+	})
+
+	t.Run("invoke returns a response", func(t *testing.T) {
+		port := newPort(t)
+		resp, err := port.Invoke(t.Context(), sample(t))
+		if err != nil {
+			t.Fatalf("Invoke: %v", err)
+		}
+		if resp == nil {
+			t.Fatal("Invoke returned a nil response and a nil error")
+		}
+	})
+
+	t.Run("stream terminates with io.EOF", func(t *testing.T) {
+		port := newPort(t)
+		stream, err := port.Stream(t.Context(), sample(t))
+		if err != nil {
+			t.Fatalf("Stream: %v", err)
+		}
+		defer stream.Close()
+
+		// A bounded loop, so a non-terminating implementation fails the suite
+		// rather than hanging CI.
+		const maxChunks = 10_000
+		var sawFinal bool
+		for i := 0; ; i++ {
+			if i == maxChunks {
+				t.Fatalf("stream produced %d chunks without reaching io.EOF", maxChunks)
+			}
+			chunk, err := stream.Next(t.Context())
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				t.Fatalf("Next: %v", err)
+			}
+			sawFinal = sawFinal || chunk.Final
+		}
+		if !sawFinal {
+			t.Fatal("no chunk was marked Final: the response leg cannot tell where usage is reported")
+		}
+	})
+
+	t.Run("close is idempotent", func(t *testing.T) {
+		// The response pipeline closes on its own error paths as well as after
+		// io.EOF, so a double Close must not panic or error.
+		port := newPort(t)
+		stream, err := port.Stream(t.Context(), sample(t))
+		if err != nil {
+			t.Fatalf("Stream: %v", err)
+		}
+		if err := stream.Close(); err != nil {
+			t.Fatalf("first Close: %v", err)
+		}
+		if err := stream.Close(); err != nil {
+			t.Fatalf("second Close: %v", err)
+		}
+	})
+
+	t.Run("respects a cancelled context", func(t *testing.T) {
+		// The router shares one deadline budget across every attempt, so an
+		// adapter that ignores cancellation can outlive the client's timeout.
+		port := newPort(t)
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+
+		if _, err := port.Invoke(ctx, sample(t)); !errors.Is(err, context.Canceled) {
+			t.Fatalf("Invoke with a cancelled context returned %v, want context.Canceled", err)
+		}
+	})
+
+	t.Run("does not exceed a short deadline", func(t *testing.T) {
+		port := newPort(t)
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+		defer cancel()
+
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			_, _ = port.Invoke(ctx, sample(t))
+		}()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("Invoke outlived its context deadline")
+		}
+	})
+}
