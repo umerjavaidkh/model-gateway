@@ -8,6 +8,7 @@ import (
 // PortName identifies an extension point a registry component can fill.
 type PortName string
 
+// The four data-plane ports. See the note below on why there is no fifth.
 const (
 	PortProvider  PortName = "provider"
 	PortGuardrail PortName = "guardrail"
@@ -104,6 +105,7 @@ type ProviderPort interface {
 // Phase says which leg of the request a guardrail is inspecting.
 type Phase uint8
 
+// The two legs a guardrail can inspect.
 const (
 	PhaseRequest Phase = iota
 	PhaseResponse
@@ -112,6 +114,7 @@ const (
 // Verdict is a guardrail's decision.
 type Verdict uint8
 
+// The decisions a guardrail can return.
 const (
 	VerdictAllow Verdict = iota
 	VerdictDeny
@@ -127,6 +130,7 @@ const (
 // leaked credential is not recoverable.
 type FailureMode uint8
 
+// The two failure modes a guardrail can be admitted under.
 const (
 	FailOpen FailureMode = iota
 	FailClosed

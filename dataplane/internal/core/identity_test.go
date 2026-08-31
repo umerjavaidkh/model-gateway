@@ -48,7 +48,8 @@ func TestParseAPIKey(t *testing.T) {
 func TestComputeKeyLookupIsDeterministicAndPeppered(t *testing.T) {
 	pepperA, pepperB := []byte("pepper-a"), []byte("pepper-b")
 
-	if core.ComputeKeyLookup(pepperA, "secret") != core.ComputeKeyLookup(pepperA, "secret") {
+	first, second := core.ComputeKeyLookup(pepperA, "secret"), core.ComputeKeyLookup(pepperA, "secret")
+	if first != second {
 		t.Fatal("the same pepper and secret must produce the same lookup")
 	}
 	if core.ComputeKeyLookup(pepperA, "secret") == core.ComputeKeyLookup(pepperB, "secret") {

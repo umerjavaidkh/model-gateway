@@ -10,6 +10,7 @@ import (
 // one admission, routing and accounting path.
 type Endpoint string
 
+// The API surfaces the gateway serves.
 const (
 	EndpointChatCompletions Endpoint = "chat_completions"
 	EndpointMessages        Endpoint = "messages"
@@ -20,6 +21,7 @@ const (
 // interactive traffic when capacity is short.
 type PriorityClass uint8
 
+// The priority classes, in shedding order: batch is shed before interactive.
 const (
 	PriorityInteractive PriorityClass = iota
 	PriorityBatch

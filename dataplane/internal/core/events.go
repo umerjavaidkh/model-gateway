@@ -5,6 +5,7 @@ import "time"
 // EventKind discriminates the closed set of events the gateway emits.
 type EventKind string
 
+// The kinds of event the gateway emits.
 const (
 	EventKindUsage EventKind = "usage"
 	EventKindAudit EventKind = "audit"
@@ -54,7 +55,10 @@ type UsageEvent struct {
 	SnapshotVersion uint64
 }
 
-func (UsageEvent) Kind() EventKind         { return EventKindUsage }
+// Kind identifies this as a usage record.
+func (UsageEvent) Kind() EventKind { return EventKindUsage }
+
+// OccurredAt reports when the request completed.
 func (e UsageEvent) OccurredAt() time.Time { return e.Timestamp }
 
 // AuditEvent records a security-relevant action. Consumers write these to an
@@ -74,5 +78,8 @@ type AuditEvent struct {
 	Hash     string
 }
 
-func (AuditEvent) Kind() EventKind         { return EventKindAudit }
+// Kind identifies this as an audit record.
+func (AuditEvent) Kind() EventKind { return EventKindAudit }
+
+// OccurredAt reports when the action took place.
 func (e AuditEvent) OccurredAt() time.Time { return e.Timestamp }

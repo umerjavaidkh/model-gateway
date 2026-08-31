@@ -7,16 +7,23 @@ import (
 	"time"
 )
 
-// Identifiers in the org -> team -> user -> application -> API key hierarchy.
+// The levels of the org -> team -> user -> application -> API key hierarchy.
 // They are distinct named types rather than bare strings so that passing a
 // TeamID where an OrgID belongs is a compile error, not a support ticket.
 type (
+	// TenantID is the billing and isolation boundary; it owns a snapshot layer.
 	TenantID string
-	OrgID    string
-	TeamID   string
-	UserID   string
-	AppID    string
-	KeyID    string
+	// OrgID is the top of a tenant's identity graph.
+	OrgID string
+	// TeamID groups users and applications within an org.
+	TeamID string
+	// UserID is a human principal, usually authenticated by OIDC.
+	UserID string
+	// AppID is a service principal, usually authenticated by API key.
+	AppID string
+	// KeyID names one issued credential, of which a key may have two live
+	// generations during rotation.
+	KeyID string
 )
 
 // Role is a named permission set resolved by the control plane. The data plane

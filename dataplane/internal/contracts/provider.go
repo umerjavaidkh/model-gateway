@@ -29,8 +29,9 @@ func RunProviderSuite(t *testing.T, newPort ProviderFactory, sample SampleCall) 
 		if port.Name() == "" {
 			t.Fatal("Name must be non-empty: it is the key a snapshot binds the port by")
 		}
-		if port.Name() != port.Name() {
-			t.Fatal("Name must be stable across calls")
+		first, second := port.Name(), port.Name()
+		if first != second {
+			t.Fatalf("Name must be stable across calls: got %q then %q", first, second)
 		}
 	})
 
@@ -51,7 +52,7 @@ func RunProviderSuite(t *testing.T, newPort ProviderFactory, sample SampleCall) 
 		if err != nil {
 			t.Fatalf("Stream: %v", err)
 		}
-		defer stream.Close()
+		defer func() { _ = stream.Close() }()
 
 		// A bounded loop, so a non-terminating implementation fails the suite
 		// rather than hanging CI.

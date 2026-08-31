@@ -53,6 +53,7 @@ func (t TrustTier) AtLeast(min TrustTier) bool { return t >= min }
 // core supplies the vocabulary; the policy layer supplies the mapping.
 type DataClass string
 
+// The data classifications, in increasing order of sensitivity.
 const (
 	DataClassPublic       DataClass = "public"
 	DataClassInternal     DataClass = "internal"

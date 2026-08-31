@@ -41,6 +41,7 @@ func (k RoutingKey) String() string {
 // calling, vision, a context-window class. The router filters candidates by it.
 type Capability string
 
+// The capabilities a deployment may declare and a caller may require.
 const (
 	CapabilityStreaming   Capability = "streaming"
 	CapabilityToolCalling Capability = "tool_calling"
