@@ -378,6 +378,17 @@ func (s *Snapshot) TenantVersion(tenant TenantID) (LayerVersion, bool) {
 	return t.version, true
 }
 
+// TenantIDs returns every tenant with a layer in this snapshot, in unspecified
+// order. It is for control-path work — version comparison, metrics, draining —
+// and is not on the request path.
+func (s *Snapshot) TenantIDs() []TenantID {
+	out := make([]TenantID, 0, len(s.tenants))
+	for id := range s.tenants {
+		out = append(out, id)
+	}
+	return out
+}
+
 // PolicyBundleRef reports the compiled policy bundle this snapshot was built
 // against.
 func (s *Snapshot) PolicyBundleRef() string { return s.global.policyBundleRef }
