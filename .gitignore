@@ -1,0 +1,18 @@
+# Go
+/dataplane/bin/
+*.test
+coverage.out
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+dist/
+*.egg-info/
+
+# Local
+.env
+.DS_Store
