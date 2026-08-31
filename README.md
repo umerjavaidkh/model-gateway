@@ -55,6 +55,14 @@ same flags CI uses. `make help` lists the rest.
 
 Requirements: Go 1.26+, Python 3.12+, [uv](https://docs.astral.sh/uv/).
 
+## Contributing
+
+[CONTRIBUTING.md](CONTRIBUTING.md) covers setup, the invariants that are not
+negotiable, and what a reviewable PR looks like.
+Security issues go through [SECURITY.md](SECURITY.md), never a public issue.
+
+Licensed under [Apache 2.0](LICENSE).
+
 ## Status
 
 Under construction, one module at a time. See `docs/adr/` for what has been
