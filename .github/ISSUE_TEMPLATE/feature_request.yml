@@ -1,0 +1,30 @@
+name: Proposal
+description: Propose a change to behaviour or design
+labels: [proposal]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What is hard or impossible today. Describe the problem, not the solution.
+    validations: { required: true }
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+    validations: { required: true }
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What else would solve this, and why is it worse?
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Does this add a data-plane port?
+      description: |
+        The design caps the data-plane extension surface at four ports. A fifth
+        is a compatibility surface maintained forever, so the default answer is
+        that request-path work belongs in the core.
+      options: ["No", "Yes — and here is why it cannot go in the core"]
+    validations: { required: true }

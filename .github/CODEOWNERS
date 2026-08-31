@@ -1,0 +1,11 @@
+# Ownership is per area, not per file. Whoever is listed is expected to
+# understand the invariants of that area, not merely to rubber-stamp a diff.
+
+*                               @umerjavaidkh
+
+# The request path and the snapshot are where correctness bugs hide.
+/dataplane/internal/core/        @umerjavaidkh
+/dataplane/internal/snapshot/    @umerjavaidkh
+
+# Workflows can grant themselves permissions. Changes here are security changes.
+/.github/workflows/              @umerjavaidkh
