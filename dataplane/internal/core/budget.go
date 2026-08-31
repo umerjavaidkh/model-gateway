@@ -10,6 +10,8 @@ type BudgetID string
 // limit and its own approval threshold.
 type BudgetScope uint8
 
+// The scopes a budget may attach to. Unset is the zero value and is never
+// valid in a built layer.
 const (
 	BudgetScopeUnset BudgetScope = iota
 	BudgetScopeKey

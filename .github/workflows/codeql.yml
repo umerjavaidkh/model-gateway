@@ -1,0 +1,43 @@
+# CodeQL is free for public repositories and is the only thing here that finds
+# real vulnerabilities rather than style. A gateway holds every provider
+# credential in the organisation, so this is not optional decoration.
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Weekly, so newly published queries reach existing code without a push.
+    - cron: "23 5 * * 1"
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  analyze:
+    name: Analyze ${{ matrix.language }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: go
+            build-mode: autobuild
+          - language: python
+            build-mode: none
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        if: matrix.language == 'go'
+        with:
+          go-version-file: dataplane/go.mod
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          queries: security-and-quality
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:${{ matrix.language }}

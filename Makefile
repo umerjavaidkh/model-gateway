@@ -17,6 +17,9 @@ check-go: ## Format check, vet and test the Go data plane
 	@test -z "$$(cd dataplane && gofmt -l .)" || { echo "gofmt needed:"; cd dataplane && gofmt -l .; exit 1; }
 	$(GO) vet ./...
 	$(GO) test -race -count=1 ./...
+	@command -v golangci-lint >/dev/null && (cd dataplane && golangci-lint run) \
+		|| echo "  (golangci-lint not installed; CI will run it — go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest)"
+
 
 .PHONY: check-py
 check-py: ## Lint, type check and test the Python control plane

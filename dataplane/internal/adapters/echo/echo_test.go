@@ -1,6 +1,7 @@
 package echo_test
 
 import (
+	"errors"
 	"io"
 	"testing"
 
@@ -40,7 +41,7 @@ func TestStreamReassemblesToTheRequestBody(t *testing.T) {
 	var usage core.TokenUsage
 	for {
 		chunk, err := stream.Next(t.Context())
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {

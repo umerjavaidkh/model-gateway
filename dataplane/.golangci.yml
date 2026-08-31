@@ -1,0 +1,54 @@
+# Linters are the part of review a human should never have to do by hand.
+# Everything here is either a correctness check or an invariant this codebase
+# actually holds — a lint nobody honours gets disabled, not tolerated.
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard   # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    - bodyclose       # a leaked HTTP response body is a connection leak, and a
+                      # gateway makes one upstream call per request
+    - contextcheck    # the router shares one deadline across attempts; a
+                      # dropped context silently outlives the client's timeout
+    - copyloopvar
+    - errorlint       # forces errors.Is/As over == and type assertions, which
+                      # is what makes our sentinel-by-code matching work
+    - gocritic
+    - gosec
+    - misspell
+    - nilerr
+    - noctx           # no HTTP request without a context
+    - perfsprint
+    - revive
+    - unconvert
+    - unparam
+    - usestdlibvars
+    - wastedassign
+
+  settings:
+    errcheck:
+      check-type-assertions: true
+    # fieldalignment is deliberately off. It wants struct fields reordered by
+    # size, saving 8-40 bytes per struct while scrambling the grouping that
+    # makes Principal, Deployment and UsageEvent readable. If snapshot memory
+    # ever shows up in a profile, revisit it with a measurement in hand.
+    revive:
+      rules:
+        - name: exported
+          arguments: [checkPrivateReceivers]
+        - name: package-comments
+
+  exclusions:
+    rules:
+      # Test files legitimately ignore errors on setup helpers and use weak
+      # randomness in fixtures.
+      - path: _test\.go
+        linters: [errcheck, gosec, unparam, revive]
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

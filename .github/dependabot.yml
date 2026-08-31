@@ -1,0 +1,16 @@
+# The reference plan calls out a supply-chain compromise and a CVE exploited
+# within 36 hours of disclosure in a comparable gateway. Automated dependency
+# PRs are the cheapest defence available.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /dataplane
+    schedule: { interval: weekly }
+  - package-ecosystem: uv
+    directory: /controlplane
+    schedule: { interval: weekly }
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+    groups:
+      actions: { patterns: ["*"] }

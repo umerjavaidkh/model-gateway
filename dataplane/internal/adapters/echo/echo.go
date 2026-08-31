@@ -69,6 +69,7 @@ type stream struct {
 	closed bool
 }
 
+// Next returns the next chunk of the echoed body, or io.EOF once it is spent.
 func (s *stream) Next(ctx context.Context) (core.Chunk, error) {
 	if err := ctx.Err(); err != nil {
 		return core.Chunk{}, err
@@ -92,6 +93,7 @@ func (s *stream) Next(ctx context.Context) (core.Chunk, error) {
 	return chunk, nil
 }
 
+// Close marks the stream spent. It is safe to call more than once.
 func (s *stream) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
