@@ -37,7 +37,40 @@
         "failure_mode": "open",
         "blocking": false
       }
-    ]
+    ],
+    "default_policy": {
+      "id": "demo",
+      "version": 1,
+      "default_effect": "allow",
+      "rules": [
+        {
+          "id": "no-embeddings",
+          "effect": "deny",
+          "endpoints": [
+            "embeddings"
+          ],
+          "reason": "embeddings are not enabled for this tenant"
+        },
+        {
+          "id": "cap-payload",
+          "effect": "deny",
+          "max_payload_bytes": 0,
+          "models": [
+            "oversized"
+          ],
+          "reason": "model is retired"
+        },
+        {
+          "id": "restrict-fast",
+          "effect": "allow",
+          "models": [
+            "fast"
+          ],
+          "data_class": "restricted",
+          "min_trust_tier": "INTERNAL"
+        }
+      ]
+    }
   },
   "tenants": [
     {

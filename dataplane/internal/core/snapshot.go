@@ -78,6 +78,10 @@ type GlobalSpec struct {
 	PolicyBundleRef string
 	// DefaultGuardrails apply to any tenant declaring none of its own.
 	DefaultGuardrails []GuardrailBinding
+	// DefaultPolicy applies to any tenant with none of its own. Carried as
+	// opaque bytes here because core must not know how policy is evaluated —
+	// that belongs to the package that evaluates it, and core imports nothing.
+	DefaultPolicy []byte
 }
 
 // TenantSpec is the unvalidated input to NewTenantLayer.
@@ -103,6 +107,10 @@ type TenantSpec struct {
 	// traffic produces a set nobody can predict, and "which guardrails am I
 	// running" must have a simple answer.
 	Guardrails []GuardrailBinding
+	// Policy replaces the fleet default rather than merging, for the same
+	// reason guardrails do: two ordered rule lists merged produce an order
+	// nobody can predict.
+	Policy []byte
 
 	// MinTrustTier is the floor for every request from this tenant, before the
 	// request's own data classification raises it further. Data residency is
@@ -127,6 +135,7 @@ type GlobalLayer struct {
 	tenantByPrefix  map[KeyPrefix]TenantID
 	plugins         map[PortName]PluginBinding
 	guardrails      []GuardrailBinding
+	policy          []byte
 	policyBundleRef string
 }
 
@@ -148,6 +157,7 @@ func NewGlobalLayer(spec GlobalSpec) (*GlobalLayer, error) {
 		tenantByPrefix:  maps.Clone(spec.TenantPrefixes),
 		plugins:         make(map[PortName]PluginBinding, len(spec.DefaultPlugins)),
 		guardrails:      spec.DefaultGuardrails,
+		policy:          spec.DefaultPolicy,
 		policyBundleRef: spec.PolicyBundleRef,
 	}
 	if g.tenantByPrefix == nil {
@@ -221,6 +231,7 @@ type TenantLayer struct {
 	budgets      map[BudgetID]BudgetState
 	plugins      map[PortName]PluginBinding
 	guardrails   []GuardrailBinding
+	policy       []byte
 	minTrustTier TrustTier
 }
 
@@ -244,6 +255,7 @@ func NewTenantLayer(spec TenantSpec) (*TenantLayer, error) {
 		budgets:      make(map[BudgetID]BudgetState, len(spec.Budgets)),
 		plugins:      make(map[PortName]PluginBinding, len(spec.Plugins)),
 		guardrails:   spec.Guardrails,
+		policy:       spec.Policy,
 		minTrustTier: spec.MinTrustTier,
 	}
 	if t.keys == nil {
@@ -519,6 +531,22 @@ func (s *Snapshot) Guardrails(tenant TenantID, phase Phase) []GuardrailBinding {
 		}
 	}
 	return applicable
+}
+
+// Policy returns the compiled policy bundle that applies to a tenant, as the
+// bytes the policy package decodes.
+//
+// core deliberately does not know what is in them. Policy evaluation is one
+// package's concern, and giving core a policy type would make the domain model
+// depend on how policy happens to be represented today.
+//
+// The returned slice aliases snapshot memory; callers may read it and must not
+// write to it.
+func (s *Snapshot) Policy(tenant TenantID) []byte {
+	if layer, ok := s.tenants[tenant]; ok && len(layer.policy) > 0 {
+		return layer.policy
+	}
+	return s.global.policy
 }
 
 // Budget reports one budget's state within a tenant.

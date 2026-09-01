@@ -19,6 +19,8 @@ import (
 	"math"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/core"
 	pb "github.com/umerjavaidkh/model-gateway/dataplane/internal/wire/gatewayv1"
 )
@@ -72,6 +74,7 @@ func DecodeGlobal(msg *pb.GlobalLayer) core.GlobalSpec {
 	for _, g := range msg.GetDefaultGuardrails() {
 		spec.DefaultGuardrails = append(spec.DefaultGuardrails, decodeGuardrail(g))
 	}
+	spec.DefaultPolicy = marshalPolicy(msg.GetDefaultPolicy())
 	return spec
 }
 
@@ -112,6 +115,7 @@ func DecodeTenant(msg *pb.TenantLayer) core.TenantSpec {
 	for _, g := range msg.GetGuardrails() {
 		spec.Guardrails = append(spec.Guardrails, decodeGuardrail(g))
 	}
+	spec.Policy = marshalPolicy(msg.GetPolicy())
 	return spec
 }
 
@@ -142,6 +146,7 @@ func EncodeGlobal(spec core.GlobalSpec) *pb.GlobalLayer {
 	for _, g := range spec.DefaultGuardrails {
 		msg.DefaultGuardrails = append(msg.DefaultGuardrails, encodeGuardrail(g))
 	}
+	msg.DefaultPolicy = unmarshalPolicy(spec.DefaultPolicy)
 	return msg
 }
 
@@ -172,6 +177,7 @@ func EncodeTenant(spec core.TenantSpec) *pb.TenantLayer {
 	for _, g := range spec.Guardrails {
 		msg.Guardrails = append(msg.Guardrails, encodeGuardrail(g))
 	}
+	msg.Policy = unmarshalPolicy(spec.Policy)
 	return msg
 }
 
@@ -352,6 +358,37 @@ func clampMillis(d time.Duration) uint32 {
 	default:
 		return uint32(ms)
 	}
+}
+
+// The policy bundle crosses this boundary as bytes rather than as a decoded
+// type, because core must not know how policy is represented — it imports
+// nothing, and a policy type there would make the domain model depend on
+// today's encoding. Re-marshalling here is the price of that separation and
+// costs one allocation per snapshot layer, not per request.
+
+func marshalPolicy(bundle *pb.PolicyBundle) []byte {
+	if bundle == nil || (len(bundle.GetRules()) == 0 && bundle.GetId() == "") {
+		return nil
+	}
+	raw, err := proto.Marshal(bundle)
+	if err != nil {
+		// Re-encoding a message that was just decoded cannot fail. Returning
+		// nil rather than panicking means a bad bundle disables policy rather
+		// than the worker.
+		return nil
+	}
+	return raw
+}
+
+func unmarshalPolicy(raw []byte) *pb.PolicyBundle {
+	if len(raw) == 0 {
+		return nil
+	}
+	var bundle pb.PolicyBundle
+	if err := proto.Unmarshal(raw, &bundle); err != nil {
+		return nil
+	}
+	return &bundle
 }
 
 func decodeBudget(b *pb.BudgetState) core.BudgetState {

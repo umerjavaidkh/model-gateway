@@ -35,6 +35,7 @@ dataplane/          Go. The request path: auth -> admit -> route -> adapt.
   internal/limits/    Rate limiting: a local lease in front of a shared window.
   internal/router/    Selection and execution: candidates, breakers, failover.
   internal/guardrails/ Inspections, run under the budget each was admitted with.
+  internal/policy/    The compiled decision table. Evaluated, never parsed.
   cmd/gateway/        The worker binary.
   cmd/snapshotgen/    Writes a demo snapshot, so the repo runs without a control plane.
   internal/contracts/ Per-port contract suites; also the plugin admission gate.
@@ -164,7 +165,7 @@ decided and why.
 | M7a — Router: selection/execution split, circuit breakers, passive health | **done** |
 | M7b — Active health probing, cost and locality objectives | **done** |
 | M8a — `GuardrailPort`: chain, budgets, secret scan, injection alerts | **done** |
-| M8b — Policy engine: compiled decision function, geo and IP rules | next |
-| M9 — PII chain | |
+| M8b — Policy engine: compiled decision table, geo and IP rules | **done** |
+| M9 — PII chain | next |
 | M10 — Component registry | |
 | M11+ — Fine-tuning | |

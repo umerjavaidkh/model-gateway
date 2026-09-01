@@ -33,6 +33,7 @@ from model_gateway_control.domain.catalog import (
     TrustTier,
 )
 from model_gateway_control.domain.identity import BudgetRef, Principal, RateLimit
+from model_gateway_control.domain.policy import PolicyBundle, PolicyEffect, PolicyRule
 from model_gateway_control.domain.tenant import Fleet, PluginBinding, Tenant
 from model_gateway_control.errors import NotFoundError
 
@@ -68,6 +69,7 @@ class Repository:
         ).all()
 
         return Fleet(
+            default_policy=await self._load_policy(None),
             version=state.version,
             deployments=tuple(_to_deployment(d) for d in deployments),
             aliases=tuple(_to_alias(a) for a in aliases),
@@ -131,6 +133,7 @@ class Repository:
             alias_overrides=tuple(_to_alias(a) for a in aliases),
             budgets=budgets,
             plugins=tuple(_to_plugin(p) for p in plugins),
+            policy=await self._load_policy(tenant_id),
             min_trust_tier=TrustTier(row.min_trust_tier),
         )
 
@@ -191,6 +194,51 @@ class Repository:
             deprecated=key.deprecated,
             not_after=_as_utc(key.not_after),
         )
+
+    async def _load_policy(self, tenant_id: str | None) -> PolicyBundle | None:
+        """Read a policy in evaluation order, or None when there is none.
+
+        None rather than an empty bundle, so "this tenant has no policy of its
+        own" is distinguishable from "this tenant has an empty one" — the first
+        falls back to the fleet default and the second deliberately does not.
+        """
+        where = (
+            models.PolicyRule.tenant_id.is_(None)
+            if tenant_id is None
+            else models.PolicyRule.tenant_id == tenant_id
+        )
+        rows = (
+            await self._session.scalars(
+                select(models.PolicyRule).where(where).order_by(models.PolicyRule.position)
+            )
+        ).all()
+        if not rows:
+            return None
+
+        return PolicyBundle(
+            id=tenant_id or "fleet",
+            rules=tuple(_to_policy_rule(row) for row in rows),
+        )
+
+
+def _to_policy_rule(row: models.PolicyRule) -> PolicyRule:
+    by_kind: dict[str, list[str]] = {}
+    for condition in row.conditions:
+        by_kind.setdefault(condition.kind, []).append(condition.value)
+
+    return PolicyRule(
+        id=row.rule_id,
+        effect=PolicyEffect(row.effect),
+        models=tuple(sorted(by_kind.get("model", []))),
+        endpoints=tuple(sorted(by_kind.get("endpoint", []))),
+        roles=tuple(sorted(by_kind.get("role", []))),
+        regions=tuple(sorted(by_kind.get("region", []))),
+        source_cidrs=tuple(sorted(by_kind.get("cidr", []))),
+        max_payload_bytes=row.max_payload_bytes,
+        data_class=row.data_class,
+        min_trust_tier=TrustTier(row.min_trust_tier),
+        reason=row.reason,
+    )
 
 
 def _as_utc(when: datetime | None) -> datetime | None:

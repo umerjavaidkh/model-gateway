@@ -17,6 +17,7 @@ import (
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/core"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/guardrails"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/limits"
+	"github.com/umerjavaidkh/model-gateway/dataplane/internal/policy"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/router"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/tracing"
 )
@@ -77,6 +78,7 @@ type Pipeline struct {
 	limiter     RateLimiter
 	router      *router.Router
 	guardrails  GuardrailChain
+	policies    *policy.Cache
 	region      string
 	// pepper keys the HMAC that turns a presented key secret into the value a
 	// snapshot indexes principals by. It never enters a snapshot, so a stolen
@@ -178,6 +180,7 @@ func New(providers ProviderRegistry, credentials CredentialResolver, pepper []by
 		telemetry:   discardTelemetry{},
 		limiter:     unlimited{},
 		guardrails:  inspectNothing{},
+		policies:    policy.NewCache(),
 		pepper:      pepper,
 		now:         time.Now,
 	}
@@ -521,6 +524,14 @@ func (p *Pipeline) admit(
 	if !principal.Models.Permits(req.Meta.Model) {
 		return core.Newf(core.CodeForbidden, "this key may not call %q", req.Meta.Model)
 	}
+
+	// Policy runs before the rate limiter for the same reason the allowlist
+	// does: refusing a request on a check that costs nothing must not first
+	// consume a permit the caller could have spent on a request that would
+	// have succeeded.
+	if err := p.applyPolicy(snap, principal, req); err != nil {
+		return err
+	}
 	if budget, denied := snap.DeniedBudget(principal); denied {
 		return core.Newf(core.CodeBudgetExhausted, "budget %q is exhausted", budget.ID)
 	}
@@ -530,6 +541,73 @@ func (p *Pipeline) admit(
 			decision.RetryAfter.Round(time.Second))
 	}
 	return nil
+}
+
+// applyPolicy evaluates the tenant's compiled policy and applies what it
+// stamps.
+//
+// A matching allow rule can raise the request's data classification and its
+// minimum trust tier. That ordering is the design's: policy decides
+// sensitivity, and the router turns sensitivity into a destination
+// constraint — which is why this runs before selection rather than after.
+func (p *Pipeline) applyPolicy(
+	snap *core.Snapshot, principal *core.Principal, req *Request,
+) error {
+	raw := snap.Policy(principal.Tenant)
+	if len(raw) == 0 {
+		return nil
+	}
+
+	bundle, err := p.policies.For(principal.Tenant, snap.GlobalVersion().Number, raw)
+	if err != nil {
+		// A bundle that will not decode is a configuration error, and the safe
+		// reading is to refuse: a policy an operator believes is in force and
+		// which silently is not is the state this is meant to prevent.
+		return core.Wrap(core.CodeForbidden, err, "policy could not be evaluated")
+	}
+
+	decision := policy.Evaluate(bundle, policy.Input{
+		Model:    req.Meta.Model,
+		Endpoint: req.Meta.Endpoint,
+		Roles:    principal.Roles,
+		Region:   p.region,
+		Source:   req.Meta.SourceIP,
+		Payload:  payloadBytes(req.Meta.PayloadBytes),
+	})
+
+	if !decision.Allowed {
+		reason := decision.Reason
+		if reason == "" {
+			reason = "refused by policy"
+		}
+		// The rule id is included: an operator asked "why was this refused"
+		// needs the rule, and a caller reporting the refusal is the fastest way
+		// for them to get it.
+		return core.Newf(core.CodeForbidden, "%s (rule %s)", reason, decision.RuleID)
+	}
+
+	if decision.DataClass != "" {
+		principal.DefaultClass = decision.DataClass
+	}
+	if decision.MinTrustTier > principal.MinTrustTier {
+		// Only ever raised. A policy that could lower a principal's floor would
+		// let a rule widen access rather than restrict it, which is not what
+		// anybody reading a policy expects it to be able to do.
+		principal.MinTrustTier = decision.MinTrustTier
+	}
+	return nil
+}
+
+// payloadBytes narrows a size for policy comparison.
+//
+// A negative size cannot happen from a read, but the conversion is unchecked
+// otherwise — and a negative wrapping to an enormous unsigned value would make
+// every max-payload rule stop matching, silently removing a restriction.
+func payloadBytes(n int) uint64 {
+	if n < 0 {
+		return 0
+	}
+	return uint64(n)
 }
 
 // unlimited is the default limiter: it enforces nothing.

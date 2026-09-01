@@ -157,6 +157,14 @@ func WrapRetryable(code Code, cause error, message string) error {
 	return &Error{Code: code, Message: message, Retryable: true, cause: cause}
 }
 
+// Wrapf is Wrap with a formatted message.
+func Wrapf(code Code, cause error, format string, args ...any) error {
+	if cause == nil {
+		return nil
+	}
+	return &Error{Code: code, Message: fmt.Sprintf(format, args...), cause: cause}
+}
+
 // CodeOf reports the Code carried by err, following the wrap chain.
 // Errors that did not originate here are CodeInternal: an unclassified error is
 // a bug in whoever failed to classify it, and reporting it as such makes that
