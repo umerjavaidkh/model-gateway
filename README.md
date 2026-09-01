@@ -78,6 +78,12 @@ That registers a second deployment under the alias `real`, with its credential
 resolved from `OPENAI_API_KEY` at call time rather than baked into the snapshot.
 Add `"stream": true` to the request for server-sent events.
 
+`-anthropic-endpoint https://api.anthropic.com/v1` does the same for the
+Messages API under the alias `reasoning`, served on `POST /v1/messages`. The
+gateway does not translate between the two schemas: a model is served on the
+surface its adapter speaks, and asking for it on the other one is a 404 that
+says so.
+
 The echo provider returns the request back, which is the point: the whole path —
 key authentication, model allowlist, budget check, trust-tier filtering, routing
 and the provider call — runs with no network and no database. `curl
@@ -113,9 +119,10 @@ decided and why.
 | M1 — Snapshot: schema, holder, atomic swap, N−1 rollback, file source | **done** |
 | M2 — Data-plane vertical slice: key auth, `/v1/chat/completions`, echo provider | **done** |
 | M3 — `ProviderPort` for real: OpenAI-compatible adapter, SSE streaming, `SecretsPort` | **done** |
-| M3b — Anthropic adapter and `/v1/messages` | |
+| M3b — Anthropic adapter and `/v1/messages` | **done** |
 | M4 — Usage events, `TelemetryPort`, Prometheus, cost attribution | **done** |
 | M4b — OTel spans and OTLP export | |
+| M5 — Control plane: Postgres, identity closure, snapshot builder, admin API | next |
 | M5 — Control plane: Postgres, identity closure, snapshot builder, admin API | |
 | M6 — Rate limits and budgets | |
 | M7 — Router: selection/execution split, circuit breakers, health EWMA | |

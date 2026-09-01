@@ -21,14 +21,18 @@ var statusByCode = map[core.Code]int{
 	core.CodeTrustTierDenied: http.StatusForbidden,
 	core.CodeInvalidRequest:  http.StatusBadRequest,
 	core.CodeModelNotFound:   http.StatusNotFound,
-	core.CodeNoCandidates:    http.StatusServiceUnavailable,
-	core.CodeRateLimited:     http.StatusTooManyRequests,
-	core.CodeBudgetExhausted: http.StatusPaymentRequired,
-	core.CodeGuardrailDenied: http.StatusUnprocessableEntity,
-	core.CodeUpstreamError:   http.StatusBadGateway,
-	core.CodeUpstreamTimeout: http.StatusGatewayTimeout,
-	core.CodeUnavailable:     http.StatusServiceUnavailable,
-	core.CodeInternal:        http.StatusInternalServerError,
+	// The model exists, but not on the surface the caller used. 404 rather than
+	// 400: from the caller's side this route does not serve that model, which
+	// is what a 404 means, and it matches how a missing model already behaves.
+	core.CodeEndpointUnsupported: http.StatusNotFound,
+	core.CodeNoCandidates:        http.StatusServiceUnavailable,
+	core.CodeRateLimited:         http.StatusTooManyRequests,
+	core.CodeBudgetExhausted:     http.StatusPaymentRequired,
+	core.CodeGuardrailDenied:     http.StatusUnprocessableEntity,
+	core.CodeUpstreamError:       http.StatusBadGateway,
+	core.CodeUpstreamTimeout:     http.StatusGatewayTimeout,
+	core.CodeUnavailable:         http.StatusServiceUnavailable,
+	core.CodeInternal:            http.StatusInternalServerError,
 }
 
 // errorBody is the OpenAI-compatible error envelope, so existing client

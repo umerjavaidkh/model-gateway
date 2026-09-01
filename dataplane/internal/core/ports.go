@@ -94,6 +94,19 @@ type ChunkStream interface {
 // Credential from a call.
 type ProviderPort interface {
 	Name() string
+	// Endpoints reports which API surfaces this adapter speaks.
+	//
+	// It exists because the second real implementation needed it: an Anthropic
+	// deployment serves /v1/messages and an OpenAI-compatible one serves
+	// /v1/chat/completions, and routing a request to an adapter that cannot
+	// speak its schema produces a confusing upstream 400 rather than a clear
+	// gateway 404.
+	//
+	// This is a property of the adapter rather than of a deployment, because it
+	// is determined by the wire protocol the adapter implements. A future
+	// adapter that serves different surfaces per deployment would be the signal
+	// to move it, and nothing here prevents that.
+	Endpoints() []Endpoint
 	Invoke(ctx context.Context, call *ProviderCall) (*ProviderResponse, error)
 	Stream(ctx context.Context, call *ProviderCall) (ChunkStream, error)
 }

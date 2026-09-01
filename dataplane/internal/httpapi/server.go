@@ -100,7 +100,10 @@ func (s *Server) Handler() http.Handler {
 		_, _ = io.WriteString(w, "ok\n")
 	})
 	mux.HandleFunc("GET /readyz", s.handleReady)
-	mux.HandleFunc("POST /v1/chat/completions", s.handleChatCompletions)
+	// Both surfaces run the same pipeline; only the payload shape and the
+	// endpoint stamped on the request differ.
+	mux.HandleFunc("POST /v1/chat/completions", s.handleCompletion(core.EndpointChatCompletions))
+	mux.HandleFunc("POST /v1/messages", s.handleCompletion(core.EndpointMessages))
 	if s.metrics != nil {
 		mux.Handle("GET /metrics", s.metrics)
 	}
@@ -133,17 +136,28 @@ func (s *Server) handleReady(w http.ResponseWriter, _ *http.Request) {
 	_ = json.NewEncoder(w).Encode(body)
 }
 
-// chatRequest is the sliver of the OpenAI payload the gateway itself needs.
+// completionRequest is the sliver of the payload the gateway itself needs.
 //
-// The rest stays opaque and is forwarded byte for byte. Parsing the whole
+// The OpenAI and Anthropic schemas differ substantially, but they agree on
+// these two fields, which is the whole of what routing and transport require.
+// Everything else stays opaque and is forwarded byte for byte: parsing the full
 // schema would mean tracking every provider's additions forever, and would make
 // the gateway reject payloads a provider would have accepted.
-type chatRequest struct {
+type completionRequest struct {
 	Model  string `json:"model"`
 	Stream bool   `json:"stream"`
 }
 
-func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
+// handleCompletion serves one API surface. The surface is bound at construction
+// rather than sniffed from the request, so a route and its schema cannot drift
+// apart.
+func (s *Server) handleCompletion(endpoint core.Endpoint) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		s.serveCompletion(w, r, endpoint)
+	}
+}
+
+func (s *Server) serveCompletion(w http.ResponseWriter, r *http.Request, endpoint core.Endpoint) {
 	requestID := s.newID()
 	w.Header().Set(HeaderRequestID, requestID)
 
@@ -166,7 +180,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var parsed chatRequest
+	var parsed completionRequest
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		writeError(w, s.logger, requestID, core.Wrap(core.CodeInvalidRequest, err, "parsing the request body"))
 		return
@@ -189,7 +203,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		Meta: core.RequestMeta{
 			RequestID:      requestID,
 			Model:          parsed.Model,
-			Endpoint:       core.EndpointChatCompletions,
+			Endpoint:       endpoint,
 			Stream:         parsed.Stream,
 			PayloadBytes:   len(body),
 			SourceIP:       clientIP(r),

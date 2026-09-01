@@ -34,6 +34,9 @@ const (
 	CodeRateLimited Code = "rate_limited"
 	// CodeBudgetExhausted means a hard budget in the principal's chain is spent.
 	CodeBudgetExhausted Code = "budget_exhausted"
+	// CodeEndpointUnsupported means the model exists but is served by an
+	// adapter that does not speak the API surface the caller used.
+	CodeEndpointUnsupported Code = "endpoint_unsupported"
 	// CodeGuardrailDenied means a blocking guardrail rejected the payload.
 	CodeGuardrailDenied Code = "guardrail_denied"
 	// CodeUpstreamError means the provider returned an error we are relaying.
@@ -53,19 +56,20 @@ const (
 // errors.Is(err, core.ErrForbidden) matches any *Error carrying CodeForbidden,
 // regardless of message or wrapped cause.
 var (
-	ErrUnauthenticated = &Error{Code: CodeUnauthenticated}
-	ErrForbidden       = &Error{Code: CodeForbidden}
-	ErrInvalidRequest  = &Error{Code: CodeInvalidRequest}
-	ErrModelNotFound   = &Error{Code: CodeModelNotFound}
-	ErrNoCandidates    = &Error{Code: CodeNoCandidates}
-	ErrTrustTierDenied = &Error{Code: CodeTrustTierDenied}
-	ErrRateLimited     = &Error{Code: CodeRateLimited}
-	ErrBudgetExhausted = &Error{Code: CodeBudgetExhausted}
-	ErrGuardrailDenied = &Error{Code: CodeGuardrailDenied}
-	ErrUpstreamError   = &Error{Code: CodeUpstreamError}
-	ErrUpstreamTimeout = &Error{Code: CodeUpstreamTimeout}
-	ErrUnavailable     = &Error{Code: CodeUnavailable}
-	ErrInternal        = &Error{Code: CodeInternal}
+	ErrUnauthenticated     = &Error{Code: CodeUnauthenticated}
+	ErrForbidden           = &Error{Code: CodeForbidden}
+	ErrInvalidRequest      = &Error{Code: CodeInvalidRequest}
+	ErrModelNotFound       = &Error{Code: CodeModelNotFound}
+	ErrNoCandidates        = &Error{Code: CodeNoCandidates}
+	ErrTrustTierDenied     = &Error{Code: CodeTrustTierDenied}
+	ErrRateLimited         = &Error{Code: CodeRateLimited}
+	ErrBudgetExhausted     = &Error{Code: CodeBudgetExhausted}
+	ErrEndpointUnsupported = &Error{Code: CodeEndpointUnsupported}
+	ErrGuardrailDenied     = &Error{Code: CodeGuardrailDenied}
+	ErrUpstreamError       = &Error{Code: CodeUpstreamError}
+	ErrUpstreamTimeout     = &Error{Code: CodeUpstreamTimeout}
+	ErrUnavailable         = &Error{Code: CodeUnavailable}
+	ErrInternal            = &Error{Code: CodeInternal}
 )
 
 // Error is the single error type the gateway's own code produces. Errors from

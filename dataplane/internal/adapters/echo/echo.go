@@ -29,6 +29,11 @@ func New() *Provider { return &Provider{} }
 // Name identifies the adapter in a snapshot's deployment records.
 func (*Provider) Name() string { return "echo" }
 
+// Endpoints reports every surface, since echoing a body is schema-agnostic.
+func (*Provider) Endpoints() []core.Endpoint {
+	return []core.Endpoint{core.EndpointChatCompletions, core.EndpointMessages, core.EndpointEmbeddings}
+}
+
 // Invoke returns the request body unchanged.
 func (*Provider) Invoke(ctx context.Context, call *core.ProviderCall) (*core.ProviderResponse, error) {
 	if err := ctx.Err(); err != nil {

@@ -71,6 +71,13 @@ func New(opts ...Option) *Provider {
 // Name identifies the adapter.
 func (*Provider) Name() string { return Name }
 
+// Endpoints reports the one surface this adapter speaks. Translating an
+// Anthropic-shaped request into this schema is a separate feature, not
+// something to do implicitly and get subtly wrong.
+func (*Provider) Endpoints() []core.Endpoint {
+	return []core.Endpoint{core.EndpointChatCompletions}
+}
+
 // Invoke makes a non-streaming call.
 func (p *Provider) Invoke(ctx context.Context, call *core.ProviderCall) (*core.ProviderResponse, error) {
 	resp, err := p.send(ctx, call, false)
