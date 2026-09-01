@@ -10,11 +10,13 @@ dependencies = [
     "alembic>=1.14",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
+    "redis>=5.2",
 ]
 
 [project.scripts]
 gatewayctl = "model_gateway_control.cli:main"
 gateway-admin = "model_gateway_control.admin_main:main"
+gateway-accounting = "model_gateway_control.accounting_main:main"
 
 [dependency-groups]
 dev = [
@@ -46,6 +48,8 @@ extend-exclude = [
     # would undo any change made here.
     "src/model_gateway_control/wire/snapshot_pb2.py",
     "src/model_gateway_control/wire/snapshot_pb2.pyi",
+    "src/model_gateway_control/wire/usage_pb2.py",
+    "src/model_gateway_control/wire/usage_pb2.pyi",
     # Migrations are append-only historical records, mostly written by Alembic's
     # autogenerate. Reformatting one that has already been applied somewhere
     # changes a file whose value is that it has not changed.
@@ -61,14 +65,14 @@ strict = true
 warn_unreachable = true
 files = ["src", "tests"]
 exclude = [
-    "src/model_gateway_control/wire/snapshot_pb2\\.pyi?$",
+    "src/model_gateway_control/wire/[a-z]+_pb2\\.pyi?$",
     "src/model_gateway_control/db/migrations/versions/",
 ]
 
 [[tool.mypy.overrides]]
 # The generated bindings are typed by a stub protoc writes, which does not
 # satisfy strict mode. Trusting them is the same call as not linting them.
-module = "model_gateway_control.wire.snapshot_pb2"
+module = "model_gateway_control.wire.*"
 ignore_errors = true
 
 [tool.pytest.ini_options]

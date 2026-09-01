@@ -13,9 +13,8 @@ name: model-gateway
 
 paths-ignore:
   # Generated protobuf bindings.
-  - controlplane/src/model_gateway_control/wire/snapshot_pb2.py
-  - controlplane/src/model_gateway_control/wire/snapshot_pb2.pyi
-  - dataplane/internal/wire/gatewayv1/snapshot.pb.go
+  - controlplane/src/model_gateway_control/wire
+  - dataplane/internal/wire/gatewayv1
 
   # Alembic migrations. Every one declares revision, down_revision,
   # branch_labels and depends_on at module level, and Alembic reads them by

@@ -269,7 +269,20 @@ func (p *Pipeline) emitUsage(ctx context.Context, snap *core.Snapshot, req *Requ
 		TimeToFirstByte: result.TimeToFirstByte,
 		Outcome:         outcome,
 		SnapshotVersion: snap.GlobalVersion().Number,
+		Budgets:         budgetIDs(result.Principal.Budgets),
 	})
+}
+
+// budgetIDs flattens a principal's budget chain for the usage event.
+func budgetIDs(refs []core.BudgetRef) []core.BudgetID {
+	if len(refs) == 0 {
+		return nil
+	}
+	ids := make([]core.BudgetID, 0, len(refs))
+	for _, ref := range refs {
+		ids = append(ids, ref.ID)
+	}
+	return ids
 }
 
 // discardTelemetry is the default: events go nowhere.

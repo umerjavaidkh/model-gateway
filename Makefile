@@ -49,8 +49,8 @@ proto: ## Regenerate Go code from proto/ (needs protoc and protoc-gen-go)
 	protoc --proto_path=proto \
 		--go_out=dataplane/internal/wire/gatewayv1 --go_opt=paths=source_relative \
 		--go_opt=Mgateway/v1/snapshot.proto=github.com/umerjavaidkh/model-gateway/dataplane/internal/wire/gatewayv1 \
-		proto/gateway/v1/snapshot.proto
-	mv dataplane/internal/wire/gatewayv1/gateway/v1/snapshot.pb.go dataplane/internal/wire/gatewayv1/
+		proto/gateway/v1/snapshot.proto proto/gateway/v1/usage.proto
+	mv dataplane/internal/wire/gatewayv1/gateway/v1/*.pb.go dataplane/internal/wire/gatewayv1/
 	rm -rf dataplane/internal/wire/gatewayv1/gateway
 	# Strip the toolchain version banner. It records which protoc built the
 	# file, which differs between a developer's machine and CI and makes the
@@ -58,21 +58,21 @@ proto: ## Regenerate Go code from proto/ (needs protoc and protoc-gen-go)
 	sed -i.bak -e '/^\/\/ versions:$$/d' -e '/^\/\/[[:space:]]*protoc/d' \
 		dataplane/internal/wire/gatewayv1/snapshot.pb.go
 	rm -f dataplane/internal/wire/gatewayv1/snapshot.pb.go.bak
-	cd dataplane && gofmt -w internal/wire/gatewayv1/snapshot.pb.go
+	cd dataplane && gofmt -w internal/wire/gatewayv1/
 	# Python bindings from the same schema, in the same target: generating them
 	# separately is how the two halves of a shared contract drift apart.
 	protoc --proto_path=proto \
 		--python_out=controlplane/src/model_gateway_control/wire \
 		--pyi_out=controlplane/src/model_gateway_control/wire \
-		proto/gateway/v1/snapshot.proto
-	mv controlplane/src/model_gateway_control/wire/gateway/v1/snapshot_pb2.py \
-		controlplane/src/model_gateway_control/wire/snapshot_pb2.py
-	mv controlplane/src/model_gateway_control/wire/gateway/v1/snapshot_pb2.pyi \
-		controlplane/src/model_gateway_control/wire/snapshot_pb2.pyi
+		proto/gateway/v1/snapshot.proto proto/gateway/v1/usage.proto
+	mv controlplane/src/model_gateway_control/wire/gateway/v1/*_pb2.py \
+		controlplane/src/model_gateway_control/wire/
+	mv controlplane/src/model_gateway_control/wire/gateway/v1/*_pb2.pyi \
+		controlplane/src/model_gateway_control/wire/
 	rm -rf controlplane/src/model_gateway_control/wire/gateway
 	sed -i.bak '/^# Protobuf Python Version:/d' \
-		controlplane/src/model_gateway_control/wire/snapshot_pb2.py \
-		controlplane/src/model_gateway_control/wire/snapshot_pb2.pyi
+		controlplane/src/model_gateway_control/wire/*_pb2.py \
+		controlplane/src/model_gateway_control/wire/*_pb2.pyi
 	rm -f controlplane/src/model_gateway_control/wire/*.bak
 
 .PHONY: demo

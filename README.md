@@ -42,7 +42,7 @@ controlplane/       Python. Registry, identity, policy authoring, snapshot compi
   db/                 SQLAlchemy models, Alembic migrations, the repository.
   snapshot/builder.py Domain -> the versioned artifact the data plane serves.
   wire/               Generated protobuf, shared with the data plane.
-  service/            Key lifecycle. What an operation means, testable without HTTP.
+  service/            Key lifecycle and accounting. Testable without HTTP.
   api/                The admin API. Translation only.
   cli.py              gatewayctl.
 proto/              The snapshot schema. One definition, generated for both.
@@ -111,6 +111,24 @@ same flags CI uses. `make help` lists the rest.
 
 Requirements: Go 1.26+, Python 3.12+, [uv](https://docs.astral.sh/uv/).
 
+Postgres and Redis are optional locally — the suites fall back to SQLite and an
+in-process store — but they are what CI gates on, so it is worth running them
+before pushing anything that touches either:
+
+```bash
+docker run -d --name gw-redis -p 6380:6379 redis:7
+docker run -d --name gw-postgres -p 5433:5432 \
+  -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=gateway_test postgres:17
+
+export GATEWAY_TEST_REDIS_URL=redis://127.0.0.1:6380
+export GATEWAY_TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@127.0.0.1:5433/gateway_test
+make check
+```
+
+The fallbacks exist so a clone runs with nothing installed, not so the real
+thing can be skipped: an emulator is a reimplementation, and reimplementations
+differ.
+
 ## Contributing
 
 [CONTRIBUTING.md](CONTRIBUTING.md) covers setup, the invariants that are not
@@ -140,8 +158,8 @@ decided and why.
 | M6a — Rate limits: local lease bucket, enforced at admission | **done** |
 | M6-pricing — Token classes and cost/price separation | **done** |
 | M6b — Redis `KVStore`, making limits fleet-wide | **done** |
-| M6c — Budgets: accounting consumer folds spend into snapshots | next |
-| M7 — Router: selection/execution split, circuit breakers, health EWMA | |
+| M6c — Budgets: accounting consumer folds spend into snapshots | **done** |
+| M7 — Router: selection/execution split, circuit breakers, health EWMA | next |
 | M8 — `GuardrailPort` and policy engine | |
 | M9 — PII chain | |
 | M10 — Component registry | |
