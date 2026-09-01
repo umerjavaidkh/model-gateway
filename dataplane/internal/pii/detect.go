@@ -19,6 +19,7 @@
 package pii
 
 import (
+	"context"
 	"regexp"
 	"strings"
 )
@@ -94,6 +95,60 @@ var detectors = []detector{
 		re:       regexp.MustCompile(`\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b`),
 		validate: validIPv4,
 	},
+}
+
+// Detector finds personal data in a payload.
+//
+// The interface exists so the two tiers compose without either knowing about
+// the other. The deterministic tier is in-process and always on for external
+// destinations; the statistical tier is a sidecar, costs tens of milliseconds,
+// and runs only when policy asks for it.
+//
+// A statistical detector is a sidecar rather than a library on purpose: the
+// models are Python, they carry their own CVE surface, they want to scale
+// independently of the request path, and an English model misses Arabic
+// entities almost entirely — so the recogniser set has to be per language,
+// which is a registry the gateway should not be in the business of holding.
+type Detector interface {
+	Name() string
+	Detect(ctx context.Context, payload []byte) ([]Match, error)
+}
+
+// Deterministic is the in-process tier, as a Detector.
+type Deterministic struct{}
+
+// Name identifies the tier.
+func (Deterministic) Name() string { return "deterministic" }
+
+// Detect runs the checksum-validated patterns.
+func (Deterministic) Detect(_ context.Context, payload []byte) ([]Match, error) {
+	return Detect(payload), nil
+}
+
+// DetectAll runs several detectors and merges what they find.
+//
+// A failing detector does not fail the request by itself — the caller decides,
+// because whether "the NER sidecar is down" means "send it anyway" depends on
+// the data classification, and only the caller knows that.
+func DetectAll(
+	ctx context.Context, payload []byte, detectors ...Detector,
+) ([]Match, []error) {
+	var all []Match
+	var errs []error
+
+	for _, detector := range detectors {
+		found, err := detector.Detect(ctx, payload)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		all = append(all, found...)
+	}
+
+	// Merged after collection rather than per detector, so a statistical match
+	// overlapping a deterministic one resolves the same way regardless of which
+	// order the tiers happened to run in.
+	return withoutOverlaps(all), errs
 }
 
 // Detect returns every match, in order, with overlaps removed.

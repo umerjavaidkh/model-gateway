@@ -52,6 +52,7 @@ func decodeRule(r *pb.PolicyRule) (Rule, error) {
 		MaxPayloadBytes: r.GetMaxPayloadBytes(),
 		DataClass:       core.DataClass(r.GetDataClass()),
 		MinTrustTier:    decodeTier(r.GetMinTrustTier()),
+		DeepInspection:  r.GetDeepInspection(),
 		Reason:          r.GetReason(),
 	}
 

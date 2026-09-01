@@ -28,6 +28,7 @@ type snapshotOpts struct {
 	tenantTier  core.TrustTier
 	deployments []core.Deployment
 	budgetSpent core.MicroUSD
+	policy      []byte
 }
 
 func buildSnapshot(t *testing.T, opts snapshotOpts) *core.Snapshot {
@@ -82,6 +83,7 @@ func buildSnapshot(t *testing.T, opts snapshotOpts) *core.Snapshot {
 			ID: "monthly", Scope: core.BudgetScopeOrg,
 			LimitMicroUSD: 1_000_000, SpentMicroUSD: opts.budgetSpent, Hard: true,
 		}},
+		Policy:       opts.policy,
 		Principals:   []core.Principal{principal},
 		Keys:         map[core.KeyLookup]core.KeyID{core.ComputeKeyLookup(pepper, "secret-1"): "key-1"},
 		MinTrustTier: tier,
@@ -97,14 +99,23 @@ func buildSnapshot(t *testing.T, opts snapshotOpts) *core.Snapshot {
 	return snap
 }
 
-func buildPipeline(t *testing.T) *gateway.Pipeline {
+func buildPipeline(t *testing.T, opts ...gateway.Option) *gateway.Pipeline {
 	t.Helper()
-	providers, err := gateway.NewStaticProviders(echo.New())
+	return buildPipelineWith(t, []core.ProviderPort{echo.New()}, opts...)
+}
+
+func buildPipelineWith(
+	t *testing.T, ports []core.ProviderPort, opts ...gateway.Option,
+) *gateway.Pipeline {
+	t.Helper()
+	providers, err := gateway.NewStaticProviders(ports...)
 	if err != nil {
 		t.Fatalf("NewStaticProviders: %v", err)
 	}
-	p, err := gateway.New(providers, gateway.NoCredentials{}, pepper,
-		gateway.WithClock(func() time.Time { return now }))
+	opts = append([]gateway.Option{
+		gateway.WithClock(func() time.Time { return now }),
+	}, opts...)
+	p, err := gateway.New(providers, gateway.NoCredentials{}, pepper, opts...)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

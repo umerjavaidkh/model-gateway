@@ -702,6 +702,11 @@ type PolicyRule struct {
 	// constraint — the ordering the design requires.
 	DataClass    string    `protobuf:"bytes,9,opt,name=data_class,json=dataClass,proto3" json:"data_class,omitempty"`
 	MinTrustTier TrustTier `protobuf:"varint,10,opt,name=min_trust_tier,json=minTrustTier,proto3,enum=gateway.v1.TrustTier" json:"min_trust_tier,omitempty"`
+	// deep_inspection asks for the statistical detection tier as well as the
+	// deterministic one. Opt-in per rule rather than derived from the data
+	// class, because it costs tens of milliseconds and an operator should be
+	// choosing to spend that rather than discovering they are.
+	DeepInspection bool `protobuf:"varint,12,opt,name=deep_inspection,json=deepInspection,proto3" json:"deep_inspection,omitempty"`
 	// reason is returned to the caller on a denial. It is written by an operator
 	// and is expected to be safe to disclose.
 	Reason        string `protobuf:"bytes,11,opt,name=reason,proto3" json:"reason,omitempty"`
@@ -807,6 +812,13 @@ func (x *PolicyRule) GetMinTrustTier() TrustTier {
 		return x.MinTrustTier
 	}
 	return TrustTier_TRUST_TIER_UNSPECIFIED
+}
+
+func (x *PolicyRule) GetDeepInspection() bool {
+	if x != nil {
+		return x.DeepInspection
+	}
+	return false
 }
 
 func (x *PolicyRule) GetReason() string {
@@ -1855,7 +1867,7 @@ const file_gateway_v1_snapshot_proto_rawDesc = "" +
 	"\n" +
 	"ModelAlias\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x120\n" +
-	"\atargets\x18\x02 \x03(\v2\x16.gateway.v1.RoutingKeyR\atargets\"\xf7\x02\n" +
+	"\atargets\x18\x02 \x03(\v2\x16.gateway.v1.RoutingKeyR\atargets\"\xa0\x03\n" +
 	"\n" +
 	"PolicyRule\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x120\n" +
@@ -1869,7 +1881,8 @@ const file_gateway_v1_snapshot_proto_rawDesc = "" +
 	"\n" +
 	"data_class\x18\t \x01(\tR\tdataClass\x12;\n" +
 	"\x0emin_trust_tier\x18\n" +
-	" \x01(\x0e2\x15.gateway.v1.TrustTierR\fminTrustTier\x12\x16\n" +
+	" \x01(\x0e2\x15.gateway.v1.TrustTierR\fminTrustTier\x12'\n" +
+	"\x0fdeep_inspection\x18\f \x01(\bR\x0edeepInspection\x12\x16\n" +
 	"\x06reason\x18\v \x01(\tR\x06reason\"\xa7\x01\n" +
 	"\fPolicyBundle\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x18\n" +

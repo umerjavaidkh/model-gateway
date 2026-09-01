@@ -128,7 +128,7 @@ class ModelAlias(_message.Message):
     def __init__(self, name: _Optional[str] = ..., targets: _Optional[_Iterable[_Union[RoutingKey, _Mapping]]] = ...) -> None: ...
 
 class PolicyRule(_message.Message):
-    __slots__ = ("id", "effect", "models", "endpoints", "roles", "regions", "source_cidrs", "max_payload_bytes", "data_class", "min_trust_tier", "reason")
+    __slots__ = ("id", "effect", "models", "endpoints", "roles", "regions", "source_cidrs", "max_payload_bytes", "data_class", "min_trust_tier", "deep_inspection", "reason")
     ID_FIELD_NUMBER: _ClassVar[int]
     EFFECT_FIELD_NUMBER: _ClassVar[int]
     MODELS_FIELD_NUMBER: _ClassVar[int]
@@ -139,6 +139,7 @@ class PolicyRule(_message.Message):
     MAX_PAYLOAD_BYTES_FIELD_NUMBER: _ClassVar[int]
     DATA_CLASS_FIELD_NUMBER: _ClassVar[int]
     MIN_TRUST_TIER_FIELD_NUMBER: _ClassVar[int]
+    DEEP_INSPECTION_FIELD_NUMBER: _ClassVar[int]
     REASON_FIELD_NUMBER: _ClassVar[int]
     id: str
     effect: PolicyEffect
@@ -150,8 +151,9 @@ class PolicyRule(_message.Message):
     max_payload_bytes: int
     data_class: str
     min_trust_tier: TrustTier
+    deep_inspection: bool
     reason: str
-    def __init__(self, id: _Optional[str] = ..., effect: _Optional[_Union[PolicyEffect, str]] = ..., models: _Optional[_Iterable[str]] = ..., endpoints: _Optional[_Iterable[str]] = ..., roles: _Optional[_Iterable[str]] = ..., regions: _Optional[_Iterable[str]] = ..., source_cidrs: _Optional[_Iterable[str]] = ..., max_payload_bytes: _Optional[int] = ..., data_class: _Optional[str] = ..., min_trust_tier: _Optional[_Union[TrustTier, str]] = ..., reason: _Optional[str] = ...) -> None: ...
+    def __init__(self, id: _Optional[str] = ..., effect: _Optional[_Union[PolicyEffect, str]] = ..., models: _Optional[_Iterable[str]] = ..., endpoints: _Optional[_Iterable[str]] = ..., roles: _Optional[_Iterable[str]] = ..., regions: _Optional[_Iterable[str]] = ..., source_cidrs: _Optional[_Iterable[str]] = ..., max_payload_bytes: _Optional[int] = ..., data_class: _Optional[str] = ..., min_trust_tier: _Optional[_Union[TrustTier, str]] = ..., deep_inspection: bool = ..., reason: _Optional[str] = ...) -> None: ...
 
 class PolicyBundle(_message.Message):
     __slots__ = ("id", "version", "rules", "default_effect")
