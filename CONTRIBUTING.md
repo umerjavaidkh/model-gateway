@@ -79,6 +79,10 @@ method does not.
 - **New port implementations run the contract suite** in
   `dataplane/internal/contracts/`. That suite is also the registry's admission
   gate, so passing it is what makes a component installable.
+- **Coverage is gated at 80%** module-wide, measured with cross-package
+  attribution (`make cover`). Generated code and `cmd/` wiring are excluded.
+  Raise the threshold when the code earns it; never lower it to make a red
+  build green.
 - **A performance claim needs a benchmark** in the repo. Restating an aspirational
   number is how every vendor in this market lost credibility.
 

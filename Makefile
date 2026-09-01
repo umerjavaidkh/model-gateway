@@ -8,12 +8,16 @@ UV  := cd controlplane && uv
 # Demo only. A real deployment supplies this from a secret manager.
 DEMO_PEPPER := local-dev-pepper-not-for-production!!
 
+# The floor, enforced in CI. Raise it when the code earns it; never lower it to
+# make a red build green.
+COVERAGE_THRESHOLD := 80
+
 .PHONY: help
 help: ## Show this help
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | awk -F':.*?## ' '{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 
 .PHONY: check
-check: check-go check-py ## Run every check CI runs
+check: check-go check-py cover ## Run every check CI runs
 
 .PHONY: check-go
 check-go: ## Format check, vet and test the Go data plane
@@ -64,5 +68,5 @@ fmt: ## Apply formatting to both halves
 	$(UV) run ruff check --fix .
 
 .PHONY: cover
-cover: ## Go coverage report
-	cd dataplane && go test -coverprofile=coverage.out ./... >/dev/null && go tool cover -func=coverage.out | tail -1
+cover: ## Go coverage report, gated at $(COVERAGE_THRESHOLD)%
+	COVERAGE_THRESHOLD=$(COVERAGE_THRESHOLD) ./scripts/coverage.sh
