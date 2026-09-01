@@ -22,6 +22,7 @@ import (
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/core"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/gateway"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/snapshot"
+	"github.com/umerjavaidkh/model-gateway/dataplane/internal/telemetry"
 )
 
 const (
@@ -49,6 +50,8 @@ type Server struct {
 	pipeline *gateway.Pipeline
 	logger   *slog.Logger
 	newID    func() string
+	metrics  http.Handler
+	stats    func() telemetry.Stats
 }
 
 // Options configures a Server. Fields left zero take a sensible default.
@@ -56,6 +59,11 @@ type Options struct {
 	Logger *slog.Logger
 	// NewID overrides request-id generation, for deterministic tests.
 	NewID func() string
+	// Metrics is the collector endpoint, served at /metrics when set.
+	Metrics http.Handler
+	// TelemetryStats reports emitter counters on /readyz, so "are we losing
+	// usage events" is answerable without a metrics scrape.
+	TelemetryStats func() telemetry.Stats
 }
 
 // NewServer builds the HTTP handler set.
@@ -63,7 +71,14 @@ func NewServer(holder *snapshot.Holder, pipeline *gateway.Pipeline, opts Options
 	if holder == nil || pipeline == nil {
 		return nil, core.New(core.CodeInternal, "the server needs a snapshot holder and a pipeline")
 	}
-	s := &Server{holder: holder, pipeline: pipeline, logger: opts.Logger, newID: opts.NewID}
+	s := &Server{
+		holder:   holder,
+		pipeline: pipeline,
+		logger:   opts.Logger,
+		newID:    opts.NewID,
+		metrics:  opts.Metrics,
+		stats:    opts.TelemetryStats,
+	}
 	if s.logger == nil {
 		s.logger = slog.Default()
 	}
@@ -86,22 +101,36 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("GET /readyz", s.handleReady)
 	mux.HandleFunc("POST /v1/chat/completions", s.handleChatCompletions)
+	if s.metrics != nil {
+		mux.Handle("GET /metrics", s.metrics)
+	}
 
 	return s.recoverPanics(mux)
 }
 
 func (s *Server) handleReady(w http.ResponseWriter, _ *http.Request) {
 	stats := s.holder.Stats()
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	body := map[string]any{
 		"snapshot_version": stats.Version.Number,
 		"snapshot_digest":  stats.Version.Digest,
 		"in_flight":        stats.InFlight,
 		"draining":         stats.PreviousInFlight,
 		"previous_loaded":  stats.PreviousLoaded,
 		"previous_version": stats.PreviousVersion.Number,
-	})
+	}
+	if s.stats != nil {
+		t := s.stats()
+		body["telemetry"] = map[string]any{
+			"received": t.Received,
+			"dropped":  t.Dropped,
+			"failed":   t.Failed,
+			"queued":   t.Queued,
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(body)
 }
 
 // chatRequest is the sliver of the OpenAI payload the gateway itself needs.
@@ -186,18 +215,6 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.logger.Info("request served",
-		slog.String("request_id", requestID),
-		slog.String("tenant", string(result.Principal.Tenant)),
-		// The only caller-controlled value in this record. Validated above and
-		// sanitised here, because a log record must be safe whatever handler is
-		// configured.
-		slog.String("model", logSafe(parsed.Model)),
-		slog.String("deployment", string(result.Deployment)),
-		slog.Int64("input_tokens", result.Usage.Input),
-		slog.Int64("output_tokens", result.Usage.Output),
-		slog.Duration("latency", result.Latency))
-
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(result.StatusCode)
 	_, _ = w.Write(result.Body)
@@ -235,6 +252,17 @@ func (s *Server) streamCompletion(w http.ResponseWriter, r *http.Request, snap *
 	}
 	defer func() { _ = result.Chunks.Close() }()
 
+	// Finish produces the usage event. It runs on every exit from here — the
+	// caller hanging up, an upstream failure mid-stream, or a clean end —
+	// because all three consumed upstream tokens that will appear on a bill.
+	var (
+		usage     core.TokenUsage
+		ttfb      time.Duration
+		streamErr error
+	)
+	streamStarted := time.Now()
+	defer func() { result.Finish(usage, ttfb, streamErr) }()
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	// Tell any intermediary not to buffer, which would defeat streaming just as
@@ -243,18 +271,24 @@ func (s *Server) streamCompletion(w http.ResponseWriter, r *http.Request, snap *
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	var usage core.TokenUsage
 	for {
 		chunk, err := result.Chunks.Next(r.Context())
 		if chunk.Usage.Input != 0 || chunk.Usage.Output != 0 {
 			usage = chunk.Usage
 		}
 		if len(chunk.Body) > 0 {
+			if ttfb == 0 {
+				// Time to the first token is what a user experiences as
+				// latency; total duration is dominated by how long the answer
+				// is, which is not a performance signal.
+				ttfb = time.Since(streamStarted)
+			}
 			if _, writeErr := fmt.Fprintf(w, "data: %s\n\n", chunk.Body); writeErr != nil {
 				// The caller hung up. Not an error worth alarming on, but the
 				// upstream call still cost money and is still accounted for.
 				s.logger.Info("client disconnected mid-stream",
 					slog.String("request_id", requestID))
+				streamErr = core.Wrap(core.CodeUpstreamError, writeErr, "client disconnected")
 				return
 			}
 			flusher.Flush()
@@ -263,6 +297,7 @@ func (s *Server) streamCompletion(w http.ResponseWriter, r *http.Request, snap *
 			break
 		}
 		if err != nil {
+			streamErr = err
 			s.logger.Error("stream failed after the response began",
 				slog.String("request_id", requestID),
 				slog.String("code", string(core.CodeOf(err))),
@@ -278,14 +313,6 @@ func (s *Server) streamCompletion(w http.ResponseWriter, r *http.Request, snap *
 
 	_, _ = io.WriteString(w, "data: [DONE]\n\n")
 	flusher.Flush()
-
-	s.logger.Info("stream served",
-		slog.String("request_id", requestID),
-		slog.String("tenant", string(result.Principal.Tenant)),
-		slog.String("model", logSafe(req.Meta.Model)),
-		slog.String("deployment", string(result.Deployment)),
-		slog.Int64("input_tokens", usage.Input),
-		slog.Int64("output_tokens", usage.Output))
 }
 
 // recoverPanics turns a panic in one request into a 500 for that request.

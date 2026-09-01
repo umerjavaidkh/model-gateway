@@ -14,6 +14,9 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/adapters/echo"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/adapters/openaicompat"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/config"
@@ -22,6 +25,7 @@ import (
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/httpapi"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/secrets"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/snapshot"
+	"github.com/umerjavaidkh/model-gateway/dataplane/internal/telemetry"
 )
 
 func main() {
@@ -65,11 +69,42 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	pipeline, err := gateway.New(providers, credentials, cfg.KeyPepper)
+	registry := prometheus.NewRegistry()
+	promSink, err := telemetry.NewPrometheusSink(registry)
 	if err != nil {
 		return err
 	}
-	server, err := httpapi.NewServer(holder, pipeline, httpapi.Options{Logger: logger})
+	emitter, err := telemetry.NewEmitter(
+		[]telemetry.Sink{promSink, telemetry.NewLogSink(logger)},
+		telemetry.WithErrorHandler(func(sink string, err error) {
+			logger.Error("telemetry sink failed",
+				slog.String("sink", sink), slog.String("error", err.Error()))
+		}),
+	)
+	if err != nil {
+		return err
+	}
+	// Closed after the HTTP server drains, so the last in-flight requests'
+	// usage events survive a deploy.
+	defer func() {
+		if err := emitter.Close(); err != nil {
+			logger.Error("draining telemetry", slog.String("error", err.Error()))
+		}
+		if s := emitter.Stats(); s.Dropped > 0 {
+			logger.Warn("usage events were dropped", slog.Int64("dropped", s.Dropped))
+		}
+	}()
+
+	pipeline, err := gateway.New(providers, credentials, cfg.KeyPepper,
+		gateway.WithTelemetry(emitter))
+	if err != nil {
+		return err
+	}
+	server, err := httpapi.NewServer(holder, pipeline, httpapi.Options{
+		Logger:         logger,
+		Metrics:        promhttp.HandlerFor(registry, promhttp.HandlerOpts{}),
+		TelemetryStats: emitter.Stats,
+	})
 	if err != nil {
 		return err
 	}
