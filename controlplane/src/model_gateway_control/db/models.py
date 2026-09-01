@@ -436,3 +436,33 @@ class IdempotencyRecord(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class UsageRecord(Base):
+    """One request, recorded once.
+
+    The stream is at-least-once, so the consumer sees duplicates after any
+    restart or redelivery. This table is what makes it idempotent: the request
+    id is the primary key, an insert that conflicts is discarded, and spend is
+    applied only for inserts that actually happened.
+
+    It doubles as the audit trail for what a budget was charged. Without it,
+    "why is this tenant's spend what it is" has no answer beyond a running
+    total that cannot be recomputed.
+    """
+
+    __tablename__ = "usage_records"
+
+    request_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(ID_LENGTH), nullable=False, index=True)
+    key_id: Mapped[str] = mapped_column(String(ID_LENGTH), nullable=False, index=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cached_input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cache_write_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    cost_micro_usd: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    price_micro_usd: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    outcome: Mapped[str] = mapped_column(String(64), nullable=False, default="")

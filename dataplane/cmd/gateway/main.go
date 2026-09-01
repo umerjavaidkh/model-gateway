@@ -17,12 +17,14 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/adapters/anthropic"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/adapters/echo"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/adapters/memkv"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/adapters/openaicompat"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/adapters/rediskv"
+	"github.com/umerjavaidkh/model-gateway/dataplane/internal/adapters/redisstream"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/config"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/core"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/gateway"
@@ -127,13 +129,47 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	limitStore, redisClient, closeLimitStore, err := openLimitStore(ctx, cfg, logger)
+	if err != nil {
+		return err
+	}
+	defer closeLimitStore()
+
+	limiter, err := limits.New(limitStore, limits.WithLogger(logger))
+	if err != nil {
+		return err
+	}
+
+	// The same Redis backs both, so a deployment that has rate limiting also
+	// has accounting without configuring anything more.
+	var usageSink telemetry.Sink
+	if redisClient != nil {
+		usageSink, err = redisstream.New(redisClient)
+		if err != nil {
+			return err
+		}
+	}
+
 	registry := prometheus.NewRegistry()
 	promSink, err := telemetry.NewPrometheusSink(registry)
 	if err != nil {
 		return err
 	}
+	sinks := []telemetry.Sink{promSink, telemetry.NewLogSink(logger)}
+	// Without a stream, usage events are observable but not accountable:
+	// budgets never move, because nothing folds spend back into a snapshot.
+	// Said out loud at startup rather than discovered from a budget that never
+	// changes.
+	if usageSink != nil {
+		sinks = append(sinks, usageSink)
+		logger.Info("usage events are published for accounting")
+	} else {
+		logger.Warn("usage events are not published",
+			slog.String("note", "budgets cannot advance without GATEWAY_REDIS_URL"))
+	}
+
 	emitter, err := telemetry.NewEmitter(
-		[]telemetry.Sink{promSink, telemetry.NewLogSink(logger)},
+		sinks,
 		telemetry.WithErrorHandler(func(sink string, err error) {
 			logger.Error("telemetry sink failed",
 				slog.String("sink", sink), slog.String("error", err.Error()))
@@ -152,17 +188,6 @@ func run(logger *slog.Logger) error {
 			logger.Warn("usage events were dropped", slog.Int64("dropped", s.Dropped))
 		}
 	}()
-
-	limitStore, closeLimitStore, err := openLimitStore(ctx, cfg, logger)
-	if err != nil {
-		return err
-	}
-	defer closeLimitStore()
-
-	limiter, err := limits.New(limitStore, limits.WithLogger(logger))
-	if err != nil {
-		return err
-	}
 
 	pipeline, err := gateway.New(providers, credentials, cfg.KeyPepper,
 		gateway.WithTelemetry(emitter),
@@ -274,30 +299,40 @@ func bootstrapSource(cfg config.Config) (snapshot.Source, error) {
 // inferred from a graph.
 func openLimitStore(
 	ctx context.Context, cfg config.Config, logger *slog.Logger,
-) (core.KVStore, func(), error) {
+) (core.KVStore, redis.UniversalClient, func(), error) {
 	if cfg.RedisURL == "" {
 		logger.Warn("rate limits are enforced per worker",
 			slog.String("store", "in-process"),
 			slog.String("note", "set GATEWAY_REDIS_URL for fleet-wide limits"))
-		return memkv.New(), func() {}, nil
+		return memkv.New(), nil, func() {}, nil
 	}
 
-	store, err := rediskv.Open(cfg.RedisURL)
+	options, err := redis.ParseURL(cfg.RedisURL)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, core.Wrap(core.CodeInvalidRequest, err, "parsing GATEWAY_REDIS_URL")
+	}
+	// One client for both the limiter and the usage stream. Two would double
+	// the connection pool for no benefit and give the two halves independent
+	// opinions about whether Redis is reachable.
+	client := redis.NewClient(options)
+
+	store, err := rediskv.New(client)
+	if err != nil {
+		_ = client.Close()
+		return nil, nil, nil, err
 	}
 	// Checked at startup rather than discovered on the first request. A
 	// misconfigured URL would otherwise present as every limit failing open,
 	// which looks like traffic behaving normally.
 	if err := store.Ping(ctx); err != nil {
-		_ = store.Close()
-		return nil, nil, err
+		_ = client.Close()
+		return nil, nil, nil, err
 	}
 
 	logger.Info("rate limits are enforced fleet-wide", slog.String("store", "redis"))
-	return store, func() {
-		if err := store.Close(); err != nil {
-			logger.Error("closing the rate limit store", slog.String("error", err.Error()))
+	return store, client, func() {
+		if err := client.Close(); err != nil {
+			logger.Error("closing the redis client", slog.String("error", err.Error()))
 		}
 	}, nil
 }

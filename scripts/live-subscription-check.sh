@@ -22,7 +22,9 @@ readonly WORKER_PORT="${LIVE_WORKER_PORT:-18202}"
 WORK="$(mktemp -d)"
 ADMIN_PID=""
 WORKER_PID=""
+ACCOUNTING_PID=""
 cleanup() {
+  [ -n "$ACCOUNTING_PID" ] && kill "$ACCOUNTING_PID" 2>/dev/null || true
   [ -n "$WORKER_PID" ] && kill "$WORKER_PID" 2>/dev/null || true
   [ -n "$ADMIN_PID" ] && kill "$ADMIN_PID" 2>/dev/null || true
   rm -rf "$WORK"
@@ -64,9 +66,14 @@ async def main():
         s.add(models.Org(id="demo-org", tenant_id="demo", name="Demo"))
         s.add(models.Team(id="demo-team", org_id="demo-org", name="Demo"))
         s.add(models.Application(id="demo-app", team_id="demo-team", name="Demo"))
+        s.add(models.Budget(
+            id="demo-budget", tenant_id="demo", scope=5,
+            limit_micro_usd=2000, spent_micro_usd=0, hard=True,
+            headroom_basis_points=0))
         s.add(models.Deployment(
             id="echo-1", base_model="echo-model", provider="echo",
-            endpoint="in-process", trust_tier=3, weight=100))
+            endpoint="in-process", trust_tier=3, weight=100,
+            input_cost_micro_usd=1_000_000, output_cost_micro_usd=1_000_000))
         alias = models.Alias(tenant_id=None, name="fast")
         alias.targets = [models.AliasTarget(position=0, base_model="echo-model")]
         s.add(alias)
@@ -154,6 +161,49 @@ if [ "$allowed" -lt 12 ]; then
 else
   echo "  FAIL a key limited to 3/min admitted all 12 requests" >&2
   fail=1
+fi
+
+# Everything above proves configuration flows outward. This proves measurement
+# flows back: a request costs money, the consumer records it, the builder folds
+# it into the next snapshot, and admission refuses the next request. Without
+# this the budget arithmetic is only ever asserted in a unit test.
+if [ -n "${GATEWAY_TEST_REDIS_URL:-}" ]; then
+  echo "==> the budget loop closes"
+  (cd "$ROOT/controlplane" && GATEWAY_DATABASE_URL="$GATEWAY_DATABASE_URL" \
+    GATEWAY_REDIS_URL="$GATEWAY_TEST_REDIS_URL" \
+    uv run gateway-accounting >"$WORK/accounting.log" 2>&1) &
+  ACCOUNTING_PID=$!
+
+  budgeted=$(admin -X POST "http://127.0.0.1:$ADMIN_PORT/v1/tenants/demo/keys" \
+    -H 'Content-Type: application/json' \
+    -d '{"key_id":"budgeted-1","application_id":"demo-app","models_allow_all":true}')
+  budgeted_key=$(printf '%s' "$budgeted" | sed -n 's/.*"presented": *"\([^"]*\)".*/\1/p')
+
+  # Attaching the budget to the key is what makes its spend chargeable.
+  (cd "$ROOT/controlplane" && uv run python "$ROOT/scripts/attach_demo_budget.py") >/dev/null
+
+  for _ in $(seq 1 30); do
+    [ "$(call_gateway "$budgeted_key")" = "200" ] && break
+    sleep 1
+  done
+
+  # Each request costs far more than the budget allows, so once the spend has
+  # been recorded and propagated the next one must be refused.
+  refused=0
+  for _ in $(seq 1 40); do
+    if [ "$(call_gateway "$budgeted_key")" = "402" ]; then refused=1; break; fi
+    sleep 1
+  done
+
+  kill "$ACCOUNTING_PID" 2>/dev/null || true
+  ACCOUNTING_PID=""
+  if [ "$refused" -eq 1 ]; then
+    echo "  ok   spend was recorded and the budget refused the next request (402)"
+  else
+    echo "  FAIL the budget never refused; the loop is open" >&2
+    tail -20 "$WORK/accounting.log" >&2
+    fail=1
+  fi
 fi
 
 echo "==> stop the control plane; traffic must continue"

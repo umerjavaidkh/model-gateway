@@ -70,6 +70,13 @@ type UsageEvent struct {
 	// SnapshotVersion records which configuration served the request. Without
 	// it, "why did this request route there?" is unanswerable after a rollout.
 	SnapshotVersion uint64
+
+	// Budgets are the budgets this request must be charged against, captured
+	// when it was served rather than looked up by the consumer afterwards. A
+	// budget detached from a key later would otherwise lose the spend incurred
+	// while it was attached, and the arithmetic would quietly stop matching
+	// the invoice.
+	Budgets []BudgetID
 }
 
 // Kind identifies this as a usage record.

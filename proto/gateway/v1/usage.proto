@@ -1,0 +1,75 @@
+syntax = "proto3";
+
+// The usage event: one record per request, produced by the data plane and
+// consumed by the control plane's accounting.
+//
+// It is a separate schema from the snapshot because the two travel in opposite
+// directions and change for unrelated reasons. A snapshot is configuration
+// pushed out; this is measurement flowing back.
+//
+// The stream is the source of truth for cost, so the same append-only
+// compatibility rules apply: never reuse or renumber a tag, and a reader must
+// tolerate fields it does not understand — during a rollout, a consumer older
+// than its producers is normal.
+package gateway.v1;
+
+option go_package = "github.com/umerjavaidkh/model-gateway/dataplane/internal/wire/gatewayv1";
+
+// TokenUsage is what a request consumed, by billing class.
+//
+// The classes are disjoint: input excludes cached_input and cache_write. That
+// is a normalisation the provider adapters perform, because providers disagree
+// about whether cached tokens are counted inside the input total or beside it,
+// and no consumer should have to know which one produced a record.
+message TokenUsage {
+  int64 input = 1;
+  int64 cached_input = 2;
+  int64 cache_write = 3;
+  int64 output = 4;
+}
+
+// UsageEvent is one served request.
+//
+// Emitted on every exit path, including refusals: a request rejected at
+// admission consumed a slot worth counting, and one that failed after routing
+// may already have burned tokens a provider will bill for.
+message UsageEvent {
+  // request_id is the trace id when tracing is on, so one string finds the
+  // trace, this record and the log line.
+  string request_id = 1;
+  int64 timestamp_unix_ms = 2;
+
+  string tenant = 3;
+  string key_id = 4;
+  // tier is the tenant's plan tier. Safe as a metrics label, unlike tenant.
+  string tier = 5;
+
+  string deployment = 6;
+  string base_model = 7;
+  string adapter_id = 8;
+  string provider = 9;
+  bool stream = 10;
+
+  TokenUsage usage = 11;
+
+  // cost is what the provider charges us; price is what the tenant is charged.
+  // Equal until a rate card exists, and separate because budgets are enforced
+  // against price and a negotiated rate makes them diverge.
+  int64 cost_micro_usd = 12;
+  int64 price_micro_usd = 13;
+
+  int64 latency_ms = 14;
+  int64 time_to_first_byte_ms = 15;
+  // outcome is empty on success, and otherwise the gateway's error code.
+  string outcome = 16;
+
+  // snapshot_version records which configuration served the request. Without
+  // it, "why did this route there" is unanswerable after a rollout.
+  uint64 snapshot_version = 17;
+
+  // budget_ids are the budgets this request must be charged against, captured
+  // when it was served rather than looked up later. A budget detached from a
+  // key afterwards would otherwise lose the spend that was incurred while it
+  // was attached, and the arithmetic would quietly stop matching the invoice.
+  repeated string budget_ids = 18;
+}
