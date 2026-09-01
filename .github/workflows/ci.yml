@@ -87,6 +87,25 @@ jobs:
     defaults:
       run:
         working-directory: controlplane
+    # The suite runs against SQLite locally for speed, but Postgres is what runs
+    # in production and therefore what gates a merge. Testing only on SQLite
+    # while deploying on Postgres is a well-known way to find schema problems in
+    # production rather than in CI.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: gateway_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+        ports:
+          - 5432:5432
+    env:
+      GATEWAY_TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/gateway_test
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7

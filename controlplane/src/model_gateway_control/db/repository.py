@@ -1,0 +1,236 @@
+"""Read the source of truth into the domain model the builder consumes.
+
+This is the only module that knows both the row shape and the domain shape.
+Everything upstream of it works in dataclasses; everything downstream works in
+tables. Keeping the translation in one place is what lets the schema be
+normalised for storage and the domain be shaped for reasoning, without either
+distorting the other.
+
+# On ancestry
+
+A key's org, team, user and application are resolved by following ordinary
+parent references, not by consulting a closure table. See
+docs/adr/0005-no-closure-table.md — the traversal happens once per snapshot
+build over a table sized by the number of API keys, and the data plane never
+queries anything at request time.
+"""
+
+from __future__ import annotations
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from model_gateway_control.db import models
+from model_gateway_control.domain.budget import Budget, BudgetScope
+from model_gateway_control.domain.catalog import (
+    Capability,
+    Cost,
+    Deployment,
+    ModelAlias,
+    RoutingKey,
+    TrustTier,
+)
+from model_gateway_control.domain.identity import BudgetRef, Principal
+from model_gateway_control.domain.tenant import Fleet, PluginBinding, Tenant
+from model_gateway_control.errors import NotFoundError
+
+
+class Repository:
+    """Loads configuration for the snapshot builder.
+
+    Takes a session rather than creating one, so a caller controls the
+    transaction boundary and a test can hand it a rolled-back session.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def load_fleet(self) -> Fleet:
+        """Read the tenant-independent half of a snapshot."""
+        state = await self._session.get(models.FleetState, 1)
+        if state is None:
+            raise NotFoundError(
+                "fleet state has not been initialised; run a migration and seed row 1"
+            )
+
+        deployments = (await self._session.scalars(select(models.Deployment))).all()
+        aliases = (
+            await self._session.scalars(
+                select(models.Alias).where(models.Alias.tenant_id.is_(None))
+            )
+        ).all()
+        plugins = (
+            await self._session.scalars(
+                select(models.PluginBinding).where(models.PluginBinding.tenant_id.is_(None))
+            )
+        ).all()
+
+        return Fleet(
+            version=state.version,
+            deployments=tuple(_to_deployment(d) for d in deployments),
+            aliases=tuple(_to_alias(a) for a in aliases),
+            default_plugins=tuple(_to_plugin(p) for p in plugins),
+            policy_bundle_ref=state.policy_bundle_ref,
+        )
+
+    async def load_tenants(self) -> list[Tenant]:
+        """Read every tenant's layer."""
+        rows = (await self._session.scalars(select(models.Tenant))).all()
+        return [await self.load_tenant(row.id) for row in rows]
+
+    async def load_tenant(self, tenant_id: str) -> Tenant:
+        """Read one tenant's layer."""
+        row = await self._session.get(models.Tenant, tenant_id)
+        if row is None:
+            raise NotFoundError(f"no tenant {tenant_id!r}")
+
+        budgets = tuple(_to_budget(b) for b in row.budgets)
+        # Scopes are read once here rather than looked up per budget reference.
+        # A query inside the principal loop would be one round trip per budget
+        # per key — invisible with three keys, and the reason a snapshot build
+        # takes minutes with thirty thousand.
+        scopes = {b.id: b.scope for b in budgets}
+
+        keys = (
+            await self._session.scalars(
+                select(models.ApiKey).where(
+                    models.ApiKey.tenant_id == tenant_id,
+                    # A revoked key is kept for the audit trail and excluded
+                    # from the snapshot, rather than deleted.
+                    models.ApiKey.revoked_at.is_(None),
+                )
+            )
+        ).all()
+
+        principals: list[Principal] = []
+        lookups: dict[bytes, str] = {}
+        for key in keys:
+            principals.append(await self._to_principal(key, tenant_id, scopes))
+            lookups[bytes(key.lookup)] = key.id
+
+        aliases = (
+            await self._session.scalars(
+                select(models.Alias).where(models.Alias.tenant_id == tenant_id)
+            )
+        ).all()
+        plugins = (
+            await self._session.scalars(
+                select(models.PluginBinding).where(models.PluginBinding.tenant_id == tenant_id)
+            )
+        ).all()
+
+        return Tenant(
+            id=row.id,
+            tier=row.tier,
+            version=row.version,
+            key_prefixes=tuple(sorted(p.prefix for p in row.prefixes)),
+            principals=tuple(principals),
+            keys=lookups,
+            alias_overrides=tuple(_to_alias(a) for a in aliases),
+            budgets=budgets,
+            plugins=tuple(_to_plugin(p) for p in plugins),
+            min_trust_tier=TrustTier(row.min_trust_tier),
+        )
+
+    async def _to_principal(
+        self, key: models.ApiKey, tenant_id: str, scopes: dict[str, BudgetScope]
+    ) -> Principal:
+        """Flatten a key and its ancestry into the record the data plane reads.
+
+        This is where the identity graph stops being a graph. Every ancestor is
+        resolved once, here, so that admission is a hash lookup rather than a
+        traversal — which is the part of the plan's §5.1 that actually matters.
+        """
+        team: models.Team | None = None
+        user_id = ""
+        app_id = ""
+
+        if key.application is not None:
+            app_id = key.application.id
+            team = await self._session.get(models.Team, key.application.team_id)
+        elif key.user is not None:
+            user_id = key.user.id
+            team = await self._session.get(models.Team, key.user.team_id)
+
+        org_id = ""
+        team_id = ""
+        if team is not None:
+            team_id = team.id
+            org = await self._session.get(models.Org, team.org_id)
+            if org is not None:
+                org_id = org.id
+
+        return Principal(
+            key_id=key.id,
+            tenant=tenant_id,
+            org=org_id,
+            team=team_id,
+            user=user_id,
+            app=app_id,
+            roles=tuple(sorted(r.role for r in key.roles)),
+            models_allow_all=key.models_allow_all,
+            models=tuple(sorted(m.model for m in key.models)),
+            budgets=tuple(
+                BudgetRef(id=b.budget_id, scope=scopes[b.budget_id])
+                for b in sorted(key.budgets, key=lambda b: b.budget_id)
+                # A budget attached to a key but absent from the tenant is a
+                # dangling reference. It is dropped here so the builder's own
+                # check reports it as what it is, rather than this raising a
+                # KeyError that names nothing useful.
+                if b.budget_id in scopes
+            ),
+            default_data_class=key.default_data_class,
+            min_trust_tier=TrustTier(key.min_trust_tier),
+            max_concurrent=key.max_concurrent,
+            deprecated=key.deprecated,
+            not_after=key.not_after,
+        )
+
+
+def _to_deployment(row: models.Deployment) -> Deployment:
+    return Deployment(
+        id=row.id,
+        key=RoutingKey(base_model=row.base_model, adapter_id=row.adapter_id),
+        provider=row.provider,
+        endpoint=row.endpoint,
+        region=row.region,
+        trust_tier=TrustTier(row.trust_tier),
+        credential_ref=row.credential_ref,
+        weight=row.weight,
+        cost=Cost(
+            input_per_1k_micro_usd=row.input_cost_micro_usd,
+            output_per_1k_micro_usd=row.output_cost_micro_usd,
+        ),
+        capabilities=tuple(
+            Capability(c.capability) for c in sorted(row.capabilities, key=lambda c: c.capability)
+        ),
+    )
+
+
+def _to_alias(row: models.Alias) -> ModelAlias:
+    return ModelAlias(
+        name=row.name,
+        targets=tuple(
+            RoutingKey(base_model=t.base_model, adapter_id=t.adapter_id) for t in row.targets
+        ),
+    )
+
+
+def _to_plugin(row: models.PluginBinding) -> PluginBinding:
+    return PluginBinding(
+        port=row.port,
+        component=row.component,
+        version=row.version,
+        config_ref=row.config_ref,
+    )
+
+
+def _to_budget(row: models.Budget) -> Budget:
+    return Budget(
+        id=row.id,
+        scope=BudgetScope(row.scope),
+        limit_micro_usd=row.limit_micro_usd,
+        spent_micro_usd=row.spent_micro_usd,
+        hard=row.hard,
+        headroom_basis_points=row.headroom_basis_points,
+    )
