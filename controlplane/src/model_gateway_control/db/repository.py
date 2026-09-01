@@ -32,7 +32,7 @@ from model_gateway_control.domain.catalog import (
     RoutingKey,
     TrustTier,
 )
-from model_gateway_control.domain.identity import BudgetRef, Principal
+from model_gateway_control.domain.identity import BudgetRef, Principal, RateLimit
 from model_gateway_control.domain.tenant import Fleet, PluginBinding, Tenant
 from model_gateway_control.errors import NotFoundError
 
@@ -183,7 +183,11 @@ class Repository:
             ),
             default_data_class=key.default_data_class,
             min_trust_tier=TrustTier(key.min_trust_tier),
-            max_concurrent=key.max_concurrent,
+            limits=RateLimit(
+                requests_per_minute=key.requests_per_minute,
+                tokens_per_minute=key.tokens_per_minute,
+                max_concurrent=key.max_concurrent,
+            ),
             deprecated=key.deprecated,
             not_after=_as_utc(key.not_after),
         )

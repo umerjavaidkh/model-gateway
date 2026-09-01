@@ -131,6 +131,28 @@ else
   fail=1
 fi
 
+echo "==> a rate-limited key is refused once its allowance is spent"
+limited=$(admin -X POST "http://127.0.0.1:$ADMIN_PORT/v1/tenants/demo/keys" \
+  -H 'Content-Type: application/json' \
+  -d '{"key_id":"limited-1","application_id":"demo-app","models_allow_all":true,"requests_per_minute":3}')
+limited_key=$(printf '%s' "$limited" | sed -n 's/.*"presented": *"\([^"]*\)".*/\1/p')
+
+for _ in $(seq 1 30); do
+  [ "$(call_gateway "$limited_key")" = "200" ] && break
+  sleep 1
+done
+
+allowed=0
+for _ in $(seq 1 12); do
+  [ "$(call_gateway "$limited_key")" = "200" ] && allowed=$((allowed + 1))
+done
+if [ "$allowed" -lt 12 ]; then
+  echo "  ok   the limit refused traffic after its allowance ($allowed of 12 admitted)"
+else
+  echo "  FAIL a key limited to 3/min admitted all 12 requests" >&2
+  fail=1
+fi
+
 echo "==> stop the control plane; traffic must continue"
 kill "$ADMIN_PID" 2>/dev/null || true
 ADMIN_PID=""

@@ -19,7 +19,12 @@ from model_gateway_control.domain.catalog import (
     RoutingKey,
     TrustTier,
 )
-from model_gateway_control.domain.identity import BudgetRef, Principal, compute_key_lookup
+from model_gateway_control.domain.identity import (
+    BudgetRef,
+    Principal,
+    RateLimit,
+    compute_key_lookup,
+)
 from model_gateway_control.domain.tenant import Fleet, PluginBinding, Tenant
 
 PEPPER = b"a-test-pepper-that-is-long-enough-32"
@@ -92,7 +97,9 @@ def tenant() -> Tenant:
                 budgets=(BudgetRef(id="monthly", scope=BudgetScope.ORG),),
                 default_data_class="confidential",
                 min_trust_tier=TrustTier.EXTERNAL,
-                max_concurrent=32,
+                limits=RateLimit(
+                    requests_per_minute=600, tokens_per_minute=90_000, max_concurrent=32
+                ),
             ),
         ),
         keys={lookup: "key-1"},

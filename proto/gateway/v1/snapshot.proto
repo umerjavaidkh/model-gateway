@@ -116,6 +116,21 @@ message BudgetRef {
   BudgetScope scope = 2;
 }
 
+// RateLimit is what a principal may consume per window.
+//
+// Zero means unlimited for that dimension, which is the only sane default: a
+// principal created before a limit existed must not suddenly be capped at zero.
+message RateLimit {
+  // Requests admitted per minute.
+  uint32 requests_per_minute = 1;
+  // Tokens per minute, counted from reported usage, so it necessarily lags by
+  // one request. Approximate by construction and documented as such.
+  uint32 tokens_per_minute = 2;
+  // Requests in flight at once. Enforced per worker, so the fleet-wide figure
+  // is this multiplied by worker count — stated rather than pretended away.
+  uint32 max_concurrent = 3;
+}
+
 message Principal {
   string key_id = 1;
   string tenant = 2;
@@ -137,6 +152,9 @@ message Principal {
   // a warning header, so rotation is a non-event for callers.
   bool deprecated = 14;
   int64 not_after_unix_ms = 15;
+  // Field 16: max_concurrent above is retained at 13 for compatibility and is
+  // superseded by limits.max_concurrent. A field tag is never reused.
+  RateLimit limits = 16;
 }
 
 // KeyEntry maps a key's lookup value to the principal it resolves to. The

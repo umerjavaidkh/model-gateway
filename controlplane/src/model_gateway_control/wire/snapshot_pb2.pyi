@@ -141,8 +141,18 @@ class BudgetRef(_message.Message):
     scope: BudgetScope
     def __init__(self, id: _Optional[str] = ..., scope: _Optional[_Union[BudgetScope, str]] = ...) -> None: ...
 
+class RateLimit(_message.Message):
+    __slots__ = ("requests_per_minute", "tokens_per_minute", "max_concurrent")
+    REQUESTS_PER_MINUTE_FIELD_NUMBER: _ClassVar[int]
+    TOKENS_PER_MINUTE_FIELD_NUMBER: _ClassVar[int]
+    MAX_CONCURRENT_FIELD_NUMBER: _ClassVar[int]
+    requests_per_minute: int
+    tokens_per_minute: int
+    max_concurrent: int
+    def __init__(self, requests_per_minute: _Optional[int] = ..., tokens_per_minute: _Optional[int] = ..., max_concurrent: _Optional[int] = ...) -> None: ...
+
 class Principal(_message.Message):
-    __slots__ = ("key_id", "tenant", "org", "team", "user", "app", "roles", "models_allow_all", "models", "budgets", "default_data_class", "min_trust_tier", "max_concurrent", "deprecated", "not_after_unix_ms")
+    __slots__ = ("key_id", "tenant", "org", "team", "user", "app", "roles", "models_allow_all", "models", "budgets", "default_data_class", "min_trust_tier", "max_concurrent", "deprecated", "not_after_unix_ms", "limits")
     KEY_ID_FIELD_NUMBER: _ClassVar[int]
     TENANT_FIELD_NUMBER: _ClassVar[int]
     ORG_FIELD_NUMBER: _ClassVar[int]
@@ -158,6 +168,7 @@ class Principal(_message.Message):
     MAX_CONCURRENT_FIELD_NUMBER: _ClassVar[int]
     DEPRECATED_FIELD_NUMBER: _ClassVar[int]
     NOT_AFTER_UNIX_MS_FIELD_NUMBER: _ClassVar[int]
+    LIMITS_FIELD_NUMBER: _ClassVar[int]
     key_id: str
     tenant: str
     org: str
@@ -173,7 +184,8 @@ class Principal(_message.Message):
     max_concurrent: int
     deprecated: bool
     not_after_unix_ms: int
-    def __init__(self, key_id: _Optional[str] = ..., tenant: _Optional[str] = ..., org: _Optional[str] = ..., team: _Optional[str] = ..., user: _Optional[str] = ..., app: _Optional[str] = ..., roles: _Optional[_Iterable[str]] = ..., models_allow_all: bool = ..., models: _Optional[_Iterable[str]] = ..., budgets: _Optional[_Iterable[_Union[BudgetRef, _Mapping]]] = ..., default_data_class: _Optional[str] = ..., min_trust_tier: _Optional[_Union[TrustTier, str]] = ..., max_concurrent: _Optional[int] = ..., deprecated: bool = ..., not_after_unix_ms: _Optional[int] = ...) -> None: ...
+    limits: RateLimit
+    def __init__(self, key_id: _Optional[str] = ..., tenant: _Optional[str] = ..., org: _Optional[str] = ..., team: _Optional[str] = ..., user: _Optional[str] = ..., app: _Optional[str] = ..., roles: _Optional[_Iterable[str]] = ..., models_allow_all: bool = ..., models: _Optional[_Iterable[str]] = ..., budgets: _Optional[_Iterable[_Union[BudgetRef, _Mapping]]] = ..., default_data_class: _Optional[str] = ..., min_trust_tier: _Optional[_Union[TrustTier, str]] = ..., max_concurrent: _Optional[int] = ..., deprecated: bool = ..., not_after_unix_ms: _Optional[int] = ..., limits: _Optional[_Union[RateLimit, _Mapping]] = ...) -> None: ...
 
 class KeyEntry(_message.Message):
     __slots__ = ("lookup", "key_id")

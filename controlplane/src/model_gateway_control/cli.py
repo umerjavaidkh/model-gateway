@@ -25,7 +25,7 @@ from model_gateway_control.domain.catalog import (
     RoutingKey,
     TrustTier,
 )
-from model_gateway_control.domain.identity import BudgetRef, Principal, issue_key
+from model_gateway_control.domain.identity import BudgetRef, Principal, RateLimit, issue_key
 from model_gateway_control.domain.tenant import Fleet, PluginBinding, Tenant
 from model_gateway_control.errors import GatewayError, InvalidRequestError
 from model_gateway_control.snapshot import build_snapshot
@@ -164,7 +164,11 @@ def _parse_tenant(raw: dict[str, Any], pepper: bytes) -> tuple[Tenant, list[tupl
                 ),
                 default_data_class=entry.get("data_class", ""),
                 min_trust_tier=_parse_trust_tier(entry.get("min_trust_tier", "EXTERNAL")),
-                max_concurrent=int(entry.get("max_concurrent", 0)),
+                limits=RateLimit(
+                    requests_per_minute=int(entry.get("requests_per_minute", 0)),
+                    tokens_per_minute=int(entry.get("tokens_per_minute", 0)),
+                    max_concurrent=int(entry.get("max_concurrent", 0)),
+                ),
             )
         )
 

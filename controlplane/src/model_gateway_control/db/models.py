@@ -203,6 +203,10 @@ class ApiKey(Base, TimestampMixin):
     models_allow_all: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     default_data_class: Mapped[str] = mapped_column(String(32), nullable=False, default="")
     min_trust_tier: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    # Zero means unlimited for each dimension, so a key created before limits
+    # existed is not silently capped at nothing.
+    requests_per_minute: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    tokens_per_minute: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     max_concurrent: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     #: The outgoing generation of a rotated key stays usable until ``not_after``,

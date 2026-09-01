@@ -50,6 +50,29 @@ class BudgetRef:
     scope: BudgetScope
 
 
+@dataclass(frozen=True, slots=True)
+class RateLimit:
+    """What a principal may consume per minute.
+
+    Zero means unlimited for that dimension. That is the only safe default: a
+    principal that predates a limit must not suddenly be capped at zero, which
+    would make adding a field an outage.
+
+    All three are approximate by construction — requests are leased in blocks,
+    tokens are counted from usage reported after the fact, and concurrency is
+    per worker. Budgets are the mechanism for anything that must be exact, and
+    they are separate for precisely this reason.
+    """
+
+    requests_per_minute: int = 0
+    tokens_per_minute: int = 0
+    max_concurrent: int = 0
+
+    def __post_init__(self) -> None:
+        if min(self.requests_per_minute, self.tokens_per_minute, self.max_concurrent) < 0:
+            raise InvalidRequestError("a rate limit cannot be negative")
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Principal:
     """The precomputed record a key resolves to.
@@ -76,7 +99,7 @@ class Principal:
 
     default_data_class: str = ""
     min_trust_tier: TrustTier = TrustTier.UNSET
-    max_concurrent: int = 0
+    limits: RateLimit = field(default_factory=RateLimit)
 
     #: The outgoing generation of a rotated key stays valid until ``not_after``,
     #: which is what makes rotation a non-event for callers.
