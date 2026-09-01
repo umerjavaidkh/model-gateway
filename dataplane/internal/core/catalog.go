@@ -74,10 +74,13 @@ type Deployment struct {
 	// the control plane's SecretsPort and cache the result with a TTL.
 	CredentialRef string
 
-	// Weight is the share of traffic this deployment may take, 0-100. Zero means
+	// Weight is the share of traffic this deployment may take, 0-100. It is
+	// uint32 to match the wire format: a narrower domain type would truncate an
+	// out-of-range value into a plausible one instead of failing validation.
+	// Zero means
 	// registered but not serving: the state a new fine-tuned adapter sits in
 	// while it takes shadow traffic, before the canary steps begin.
-	Weight uint8
+	Weight uint32
 
 	Cost         Cost
 	Capabilities []Capability

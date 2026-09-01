@@ -1,0 +1,188 @@
+syntax = "proto3";
+
+// The snapshot wire format: the contract between the Python control plane that
+// compiles configuration and the Go data plane that serves requests from it.
+//
+// This is deliberately NOT the same as the Go domain types in internal/core.
+// Domain types are shaped for the request path and are refactored freely; wire
+// types are append-only and backward-compatible forever. Collapsing the two
+// would make every internal rename a wire-compatibility question.
+//
+// Compatibility rules for anyone editing this file:
+//   - Never reuse or renumber a field tag. Use `reserved` when removing one.
+//   - New fields are always optional in effect: an older worker must be able to
+//     read a newer layer and ignore what it does not understand, because during
+//     a rollout both versions are live at once.
+//   - Enums always keep an UNSPECIFIED zero value, so a value added later
+//     arrives as "unspecified" rather than being silently read as the first
+//     real variant.
+package gateway.v1;
+
+option go_package = "github.com/umerjavaidkh/model-gateway/dataplane/internal/wire/gatewayv1";
+
+// LayerVersion identifies one build of one layer. Number orders versions;
+// digest content-addresses the bytes so a worker can skip a re-fetch and two
+// workers claiming the same version can be proven to hold the same layer.
+message LayerVersion {
+  uint64 number = 1;
+  string digest = 2;
+}
+
+enum TrustTier {
+  TRUST_TIER_UNSPECIFIED = 0;
+  TRUST_TIER_EXTERNAL = 1;
+  TRUST_TIER_PRIVATE_CLOUD = 2;
+  TRUST_TIER_INTERNAL = 3;
+}
+
+enum BudgetScope {
+  BUDGET_SCOPE_UNSPECIFIED = 0;
+  BUDGET_SCOPE_KEY = 1;
+  BUDGET_SCOPE_APP = 2;
+  BUDGET_SCOPE_USER = 3;
+  BUDGET_SCOPE_TEAM = 4;
+  BUDGET_SCOPE_ORG = 5;
+  BUDGET_SCOPE_MODEL = 6;
+  BUDGET_SCOPE_TRAINING = 7;
+}
+
+enum Port {
+  PORT_UNSPECIFIED = 0;
+  PORT_PROVIDER = 1;
+  PORT_GUARDRAIL = 2;
+  PORT_STORE = 3;
+  PORT_TELEMETRY = 4;
+}
+
+// RoutingKey is (base model, adapter). Adapter is empty for a plain base model.
+// Multi-LoRA serving means one base deployment serves many adapters, so this is
+// the routing table's key from the first release rather than a bare model name.
+message RoutingKey {
+  string base_model = 1;
+  string adapter_id = 2;
+}
+
+message Cost {
+  // Millionths of a US dollar per thousand tokens. Integer, never floating
+  // point: per-token prices are small enough that float rounding reaches the
+  // invoice.
+  int64 input_per_1k_micro_usd = 1;
+  int64 output_per_1k_micro_usd = 2;
+}
+
+message Deployment {
+  string id = 1;
+  RoutingKey key = 2;
+  string provider = 3;
+  string endpoint = 4;
+  string region = 5;
+  TrustTier trust_tier = 6;
+  // A reference to a secret, never the secret. Provider credentials must not
+  // enter a snapshot: snapshots are replicated to every worker, cached and
+  // versioned. Workers resolve the reference separately and cache with a TTL.
+  string credential_ref = 7;
+  // Share of traffic, 0-100. Zero means registered but not serving — the state
+  // a fine-tuned adapter sits in while it takes shadow traffic.
+  uint32 weight = 8;
+  Cost cost = 9;
+  repeated string capabilities = 10;
+}
+
+message ModelAlias {
+  string name = 1;
+  repeated RoutingKey targets = 2;
+}
+
+message PluginBinding {
+  Port port = 1;
+  string component = 2;
+  string version = 3;
+  string config_ref = 4;
+}
+
+message BudgetState {
+  string id = 1;
+  BudgetScope scope = 2;
+  int64 limit_micro_usd = 3;
+  int64 spent_micro_usd = 4;
+  bool hard = 5;
+  // Basis points of the limit held back so requests already streaming when the
+  // budget tips can finish without overshooting. 500 = 5%.
+  uint32 headroom_basis_points = 6;
+}
+
+message BudgetRef {
+  string id = 1;
+  BudgetScope scope = 2;
+}
+
+message Principal {
+  string key_id = 1;
+  string tenant = 2;
+  string org = 3;
+  string team = 4;
+  string user = 5;
+  string app = 6;
+  repeated string roles = 7;
+  // allow_all is explicit rather than implied by an empty list, so that an
+  // empty allowlist means "nothing" and a builder that forgets to populate it
+  // fails closed.
+  bool models_allow_all = 8;
+  repeated string models = 9;
+  repeated BudgetRef budgets = 10;
+  string default_data_class = 11;
+  TrustTier min_trust_tier = 12;
+  uint32 max_concurrent = 13;
+  // The outgoing generation of a rotated key stays valid until not_after, with
+  // a warning header, so rotation is a non-event for callers.
+  bool deprecated = 14;
+  int64 not_after_unix_ms = 15;
+}
+
+// KeyEntry maps a key's lookup value to the principal it resolves to. The
+// lookup is HMAC-SHA256 of the key secret under a pepper the worker holds and
+// the snapshot never carries, so a stolen snapshot yields no usable key.
+message KeyEntry {
+  bytes lookup = 1;
+  string key_id = 2;
+}
+
+// GlobalLayer is the tenant-independent half of a snapshot: large, and changes
+// rarely.
+message GlobalLayer {
+  LayerVersion version = 1;
+  int64 built_at_unix_ms = 2;
+  repeated Deployment deployments = 3;
+  repeated ModelAlias aliases = 4;
+  // Routes an API key's prefix segment to a tenant, so principal lookup is one
+  // probe into one tenant's map rather than a scan across every tenant.
+  map<string, string> tenant_prefixes = 5;
+  repeated PluginBinding default_plugins = 6;
+  string policy_bundle_ref = 7;
+}
+
+// TenantLayer is one tenant's slice: small, and changes constantly. It is
+// versioned and shipped independently of the global layer, so a budget edit
+// does not reship the catalog to every worker.
+message TenantLayer {
+  string tenant = 1;
+  LayerVersion version = 2;
+  int64 built_at_unix_ms = 3;
+  // Plan tier. Safe as a metrics label, unlike the tenant id, which is
+  // unbounded cardinality and will take Prometheus down.
+  string tier = 4;
+  repeated Principal principals = 5;
+  repeated KeyEntry keys = 6;
+  repeated ModelAlias alias_overrides = 7;
+  repeated BudgetState budgets = 8;
+  repeated PluginBinding plugins = 9;
+  TrustTier min_trust_tier = 10;
+}
+
+// Snapshot is a global layer plus the tenant layers composed onto it. Layers
+// are also transferable on their own; this message is the full-fetch form used
+// on worker startup and after a watch stream gap.
+message Snapshot {
+  GlobalLayer global = 1;
+  repeated TenantLayer tenants = 2;
+}

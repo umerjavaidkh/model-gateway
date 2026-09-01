@@ -42,6 +42,7 @@ linters:
         - name: package-comments
 
   exclusions:
+    generated: strict
     rules:
       # Test files legitimately ignore errors on setup helpers and use weak
       # randomness in fixtures.
