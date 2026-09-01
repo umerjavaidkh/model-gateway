@@ -17,6 +17,7 @@ import (
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/core"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/guardrails"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/limits"
+	"github.com/umerjavaidkh/model-gateway/dataplane/internal/pii"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/policy"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/router"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/tracing"
@@ -79,6 +80,7 @@ type Pipeline struct {
 	router      *router.Router
 	guardrails  GuardrailChain
 	policies    *policy.Cache
+	vault       *pii.Vault
 	region      string
 	// pepper keys the HMAC that turns a presented key secret into the value a
 	// snapshot indexes principals by. It never enters a snapshot, so a stolen
@@ -122,6 +124,14 @@ func WithGuardrails(chain GuardrailChain) Option {
 			p.guardrails = chain
 		}
 	}
+}
+
+// WithVault enables the tokenise strategy, which needs somewhere to keep
+// originals until the response is restored. Without one, a request that would
+// have been tokenised is redacted instead — losing the ability to restore, but
+// never sending unprotected data.
+func WithVault(vault *pii.Vault) Option {
+	return func(p *Pipeline) { p.vault = vault }
 }
 
 // WithRegion tells selection where this worker runs, so a deployment in the
@@ -263,8 +273,13 @@ func (p *Pipeline) Handle(ctx context.Context, snap *core.Snapshot, req *Request
 	result.Deployment = deployment.ID
 	result.Route = deployment.Key
 
+	// The replacements belong to whichever attempt actually served, which is
+	// not known until execution finishes — a retry across trust tiers
+	// re-tokenises, and restoring against an earlier attempt's map would
+	// substitute the wrong values.
+	var replacements map[string]string
 	executed, err := stage(ctx, "adapt", func() (*router.Result, error) {
-		return p.adapt(ctx, candidates, req, false)
+		return p.adapt(ctx, candidates, req, &principal, false, &replacements)
 	})
 	if err != nil {
 		emit(err)
@@ -278,7 +293,13 @@ func (p *Pipeline) Handle(ctx context.Context, snap *core.Snapshot, req *Request
 	resp := executed.Response
 
 	result.StatusCode = resp.StatusCode
-	result.Body = resp.Body
+	// Restored before anything else sees it. The audit tap sits after this, so
+	// what is logged is the redacted form and the vault mapping never reaches
+	// a durable log.
+	result.Body = pii.Restore(resp.Body, replacements)
+	if p.vault != nil && len(replacements) > 0 {
+		p.vault.Forget(ctx, principal.Tenant, req.Meta.RequestID, replacements)
+	}
 	result.Usage = resp.Usage
 	// Recorded after the call, which is the earliest the count exists. A token
 	// limit therefore takes effect on the *next* request; that lag is inherent
@@ -420,7 +441,8 @@ func (p *Pipeline) HandleStream(ctx context.Context, snap *core.Snapshot, req *R
 	// Retries here cover starting the stream, not continuing one. Once a byte
 	// has been relayed the response is committed and failing over would send
 	// the caller two different answers concatenated.
-	executed, err := p.adapt(ctx, candidates, req, true)
+	var replacements map[string]string
+	executed, err := p.adapt(ctx, candidates, req, &principal, true, &replacements)
 	if err != nil {
 		if executed != nil && len(executed.Attempts) > 0 {
 			result.Deployment = executed.Attempts[len(executed.Attempts)-1].Deployment
@@ -433,7 +455,14 @@ func (p *Pipeline) HandleStream(ctx context.Context, snap *core.Snapshot, req *R
 	result.deployment = deployment
 	result.Deployment = deployment.ID
 	result.Route = deployment.Key
+	if p.vault != nil && len(replacements) > 0 {
+		tenant, requestID := principal.Tenant, req.Meta.RequestID
+		result.forget = func() { p.vault.Forget(ctx, tenant, requestID, replacements) }
+	}
 	result.Chunks = executed.Stream
+	// The transport restores as chunks arrive, because a placeholder can be
+	// split across them and only the transport sees the boundaries.
+	result.Restorer = pii.NewRestorer(replacements)
 	// Finish is deferred to the caller because only the caller knows how the
 	// stream ended and what it consumed. Every early-exit path above has
 	// already emitted, so exactly one event is produced either way.
@@ -464,9 +493,15 @@ type StreamResult struct {
 	Deployment core.DeploymentID
 	Route      core.RoutingKey
 
+	// Restorer puts originals back as chunks arrive. Always non-nil; it is a
+	// pass-through when there is nothing to restore, so the transport needs no
+	// branch.
+	Restorer *pii.Restorer
+
 	deployment   core.Deployment
 	finish       func(core.TokenUsage, time.Duration, error)
 	releaseLimit func()
+	forget       func()
 	finished     sync.Once
 }
 
@@ -478,6 +513,9 @@ func (r *StreamResult) Finish(usage core.TokenUsage, ttfb time.Duration, err err
 		return
 	}
 	r.finished.Do(func() {
+		if r.forget != nil {
+			r.forget()
+		}
 		if r.releaseLimit != nil {
 			r.releaseLimit()
 		}
@@ -653,6 +691,63 @@ func (p *Pipeline) guard(
 	return outcome.Payload, nil
 }
 
+// protect applies the PII strategy the chosen destination requires.
+//
+// The strategy comes from the destination's trust tier and the request's data
+// classification together. A destination inside the trust boundary needs no
+// transform: redacting there costs the model context and buys nothing, because
+// the data never crosses a boundary.
+//
+// The originals are returned rather than stored on the request, so the caller
+// restores against the attempt that actually served — a retry across tiers
+// re-tokenises, and restoring against an earlier attempt's replacements would
+// substitute the wrong values.
+func (p *Pipeline) protect(
+	ctx context.Context, principal *core.Principal, req *Request, d core.Deployment,
+) ([]byte, map[string]string, error) {
+	strategy := p.strategyFor(principal.DefaultClass, d.TrustTier)
+	if strategy == pii.StrategyNone {
+		return req.Body, nil, nil
+	}
+
+	result := pii.Transform(req.Body, strategy, p.pepper)
+	if result.Count == 0 {
+		return req.Body, nil, nil
+	}
+
+	if strategy == pii.StrategyTokenize && p.vault != nil {
+		// Fails the request rather than proceeding. A tokenised request whose
+		// originals were not stored returns placeholders to the caller, which
+		// is a silently wrong answer rather than a visible failure.
+		if err := p.vault.Put(ctx, principal.Tenant, req.Meta.RequestID, result.Replacements); err != nil {
+			return nil, nil, err
+		}
+	}
+	return result.Payload, result.Replacements, nil
+}
+
+// strategyFor decides what a destination requires.
+//
+// Deliberately simple and conservative: anything leaving the trust boundary
+// carrying classified data is transformed, and the strategy escalates with
+// sensitivity. Tokenising is reserved for the case that genuinely needs values
+// back, because a vault nobody needs is a database of personal data with a
+// retention policy.
+func (p *Pipeline) strategyFor(class core.DataClass, tier core.TrustTier) pii.Strategy {
+	if tier >= core.TrustInternal {
+		return pii.StrategyNone
+	}
+
+	switch class {
+	case core.DataClassRestricted, core.DataClassConfidential:
+		return pii.StrategyTokenize
+	case core.DataClassInternal:
+		return pii.StrategyRedact
+	default:
+		return pii.StrategyNone
+	}
+}
+
 // inspectNothing is the default chain: no guardrail runs.
 type inspectNothing struct{}
 
@@ -700,7 +795,12 @@ func (p *Pipeline) route(
 // metadata instead would let a transport that set it wrong get a completed
 // body where it expected a cursor, and discover it as a nil dereference.
 func (p *Pipeline) adapt(
-	ctx context.Context, candidates []router.Candidate, req *Request, stream bool,
+	ctx context.Context,
+	candidates []router.Candidate,
+	req *Request,
+	principal *core.Principal,
+	stream bool,
+	out *map[string]string,
 ) (*router.Result, error) {
 	return p.router.Execute(ctx, candidates, req.Meta.Deadline,
 		func(ctx context.Context, provider core.ProviderPort, d core.Deployment) (
@@ -712,8 +812,20 @@ func (p *Pipeline) adapt(
 			if err != nil {
 				return nil, nil, err
 			}
+
+			// Transformed per attempt too, and for a sharper reason: a list
+			// filtered to "at least external" legitimately contains an
+			// internal deployment and an external one, so a payload prepared
+			// for the first is under-redacted for the second. See
+			// docs/adr/0007-pii-transform-per-attempt.md.
+			body, replacements, err := p.protect(ctx, principal, req, d)
+			if err != nil {
+				return nil, nil, err
+			}
+			*out = replacements
+
 			call := &core.ProviderCall{
-				Deployment: d, Meta: req.Meta, Body: req.Body, Credential: credential,
+				Deployment: d, Meta: req.Meta, Body: body, Credential: credential,
 			}
 			if stream {
 				chunks, err := provider.Stream(ctx, call)
