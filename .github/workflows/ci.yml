@@ -43,7 +43,9 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Install protoc-gen-go at the module's protobuf version
         working-directory: dataplane
-        run: go install google.golang.org/protobuf/cmd/protoc-gen-go@$(go list -m -f '{{.Version}}' google.golang.org/protobuf)
+        run: |
+          version="$(go list -m -f '{{.Version}}' google.golang.org/protobuf)"
+          go install "google.golang.org/protobuf/cmd/protoc-gen-go@${version}"
       # Generated code is committed so the build needs no toolchain. That only
       # holds if it actually matches the .proto, which is what this checks.
       - run: make proto
