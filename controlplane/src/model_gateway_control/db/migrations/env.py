@@ -27,9 +27,21 @@ target_metadata = Base.metadata
 
 
 def _database_url() -> str:
-    url = os.environ.get("GATEWAY_DATABASE_URL")
+    """Resolve the database URL.
+
+    An explicit ``sqlalchemy.url`` on the config wins, so a caller driving
+    Alembic programmatically — a test, or a tool migrating several databases —
+    can say which one without mutating the environment. Otherwise it comes from
+    ``GATEWAY_DATABASE_URL``, which is how a deployment supplies it.
+
+    Neither is read from alembic.ini: a connection string usually carries a
+    password, and that file is committed.
+    """
+    url = config.get_main_option("sqlalchemy.url") or os.environ.get("GATEWAY_DATABASE_URL")
     if not url:
-        raise RuntimeError("GATEWAY_DATABASE_URL is required to run migrations")
+        raise RuntimeError(
+            "no database URL: set GATEWAY_DATABASE_URL or pass sqlalchemy.url on the config"
+        )
     return url
 
 

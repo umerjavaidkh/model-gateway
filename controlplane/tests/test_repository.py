@@ -20,8 +20,9 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from model_gateway_control.db import models
+from model_gateway_control.db.models import Base
 from model_gateway_control.db.repository import Repository
-from model_gateway_control.db.session import create_all, create_engine, session_factory
+from model_gateway_control.db.session import create_engine, session_factory
 from model_gateway_control.domain.budget import BudgetScope
 from model_gateway_control.domain.catalog import Capability, TrustTier
 from model_gateway_control.errors import NotFoundError
@@ -32,14 +33,23 @@ DEFAULT_URL = "sqlite+aiosqlite:///:memory:"
 
 @pytest_asyncio.fixture
 async def session() -> AsyncIterator[AsyncSession]:
-    """A session against a freshly created schema.
+    """A session against a schema built fresh for this test.
 
-    The schema is built with ``create_all`` rather than by running migrations,
-    because these tests are about the mapping, not about migration mechanics.
-    That the migration produces the same shape is checked separately.
+    The schema is dropped and recreated per test rather than merely created.
+    In-memory SQLite gives each connection its own empty database, so creating
+    was enough locally — but Postgres persists across tests, and the second one
+    to call ``seed`` collided on a primary key. That divergence is exactly why
+    the Postgres run is the gate rather than a formality.
+
+    ``create_all`` is used rather than migrations because these tests are about
+    the mapping. That the migration produces the same shape is checked in
+    test_migrations.py.
     """
     engine = create_engine(os.environ.get("GATEWAY_TEST_DATABASE_URL", DEFAULT_URL))
-    await create_all(engine)
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.drop_all)
+        await connection.run_sync(Base.metadata.create_all)
+
     factory = session_factory(engine)
     async with factory() as session:
         yield session

@@ -11,6 +11,7 @@ SQLite. Skipped unless ``GATEWAY_TEST_DATABASE_URL`` names one; CI always does.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
 
@@ -35,12 +36,24 @@ def _alembic_config(url: str) -> Config:
     return config
 
 
+async def _alembic(url: str, action: str, revision: str) -> None:
+    """Run an Alembic command off the test's event loop.
+
+    env.py calls asyncio.run(), which raises inside a loop that is already
+    running — and pytest-asyncio always has one. A worker thread has no loop of
+    its own, so asyncio.run() there behaves exactly as it does on the command
+    line, which is the thing being tested.
+    """
+    config = _alembic_config(url)
+    runner = command.upgrade if action == "upgrade" else command.downgrade
+    await asyncio.to_thread(runner, config, revision)
+
+
 async def test_upgrade_head_produces_a_readable_schema() -> None:
     url = os.environ["GATEWAY_TEST_DATABASE_URL"]
 
-    config = _alembic_config(url)
-    command.downgrade(config, "base")
-    command.upgrade(config, "head")
+    await _alembic(url, "downgrade", "base")
+    await _alembic(url, "upgrade", "head")
 
     engine = create_engine(url)
     try:
@@ -61,8 +74,7 @@ async def test_downgrade_is_reversible() -> None:
     # Friday. Reversibility is checked here rather than discovered during an
     # incident.
     url = os.environ["GATEWAY_TEST_DATABASE_URL"]
-    config = _alembic_config(url)
 
-    command.upgrade(config, "head")
-    command.downgrade(config, "base")
-    command.upgrade(config, "head")
+    await _alembic(url, "upgrade", "head")
+    await _alembic(url, "downgrade", "base")
+    await _alembic(url, "upgrade", "head")
