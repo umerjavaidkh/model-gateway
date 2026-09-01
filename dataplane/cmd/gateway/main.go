@@ -23,6 +23,7 @@ import (
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/adapters/echo"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/adapters/injectionheuristics"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/adapters/memkv"
+	"github.com/umerjavaidkh/model-gateway/dataplane/internal/adapters/nersidecar"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/adapters/openaicompat"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/adapters/rediskv"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/adapters/redisstream"
@@ -224,6 +225,32 @@ func run(logger *slog.Logger) error {
 			slog.String("note", "tokenised requests will be redacted instead"))
 	}
 
+	// The statistical tier for names, locations and organisations. It runs
+	// only for requests whose policy rule asks for it, so a worker without a
+	// sidecar is a valid deployment — it just cannot serve those rules, and
+	// says so once at startup rather than per request.
+	var nerDetector pii.Detector
+	if cfg.NERSocket != "" {
+		sidecar, err := nersidecar.New(cfg.NERSocket)
+		if err != nil {
+			return err
+		}
+		// A wrong socket path would otherwise present as every deep-inspection
+		// request failing detection, long after the deploy that caused it.
+		pingCtx, cancelPing := context.WithTimeout(ctx, 5*time.Second)
+		err = sidecar.Ping(pingCtx)
+		cancelPing()
+		if err != nil {
+			return core.Wrapf(core.CodeInternal, err,
+				"the NER sidecar at %s is not answering", cfg.NERSocket)
+		}
+		nerDetector = sidecar
+		logger.Info("deep inspection enabled", slog.String("socket", cfg.NERSocket))
+	} else {
+		logger.Info("deep inspection is not available",
+			slog.String("note", "set GATEWAY_NER_SOCKET to serve policies that require it"))
+	}
+
 	rt, err := router.New(providers, router.WithLogger(logger))
 	if err != nil {
 		return err
@@ -247,7 +274,9 @@ func run(logger *slog.Logger) error {
 		gateway.WithRouter(rt),
 		gateway.WithRegion(cfg.Region),
 		gateway.WithGuardrails(guardrailChain),
-		gateway.WithVault(vault))
+		gateway.WithVault(vault),
+		gateway.WithNERDetector(nerDetector),
+		gateway.WithLogger(logger))
 	if err != nil {
 		return err
 	}

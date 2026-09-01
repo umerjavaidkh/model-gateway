@@ -49,6 +49,7 @@ controlplane/       Python. Registry, identity, policy authoring, snapshot compi
   service/            Key lifecycle and accounting. Testable without HTTP.
   api/                The admin API. Translation only.
   cli.py              gatewayctl.
+sidecars/pii-ner/   Python. Statistical PII detection, reached over a Unix socket.
 proto/              The snapshot schema. One definition, generated for both.
 examples/           A demo snapshot description.
 docs/adr/           Architecture decision records.
@@ -168,6 +169,6 @@ decided and why.
 | M8a — `GuardrailPort`: chain, budgets, secret scan, injection alerts | **done** |
 | M8b — Policy engine: compiled decision table, geo and IP rules | **done** |
 | M9a — PII chain: detection, redact/hash/tokenize, streaming restoration | **done** |
-| M9b — NER sidecar for names, locations and organisations | next |
-| M10 — Component registry | |
+| M9b — NER sidecar for names, locations and organisations | **done** |
+| M10 — Component registry | next |
 | M11+ — Fine-tuning | |

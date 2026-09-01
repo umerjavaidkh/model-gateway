@@ -136,11 +136,18 @@ func vaultKey(tenant core.TenantID, requestID, placeholder string) string {
 // lookup, so a hashed identifier is stable across the fleet and useless to
 // anyone holding only the output.
 func Transform(payload []byte, strategy Strategy, pepper []byte) Result {
+	return TransformMatches(payload, Detect(payload), strategy, pepper)
+}
+
+// TransformMatches replaces already-detected values.
+//
+// Separate from Transform so the statistical tier's findings can be merged with
+// the deterministic tier's before anything is replaced. Transforming twice
+// would place a placeholder inside a placeholder.
+func TransformMatches(payload []byte, matches []Match, strategy Strategy, pepper []byte) Result {
 	if strategy == StrategyNone || strategy == "" {
 		return Result{Payload: payload}
 	}
-
-	matches := Detect(payload)
 	if len(matches) == 0 {
 		return Result{Payload: payload}
 	}

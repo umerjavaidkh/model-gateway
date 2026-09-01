@@ -153,6 +153,12 @@ message PolicyRule {
   string data_class = 9;
   TrustTier min_trust_tier = 10;
 
+  // deep_inspection asks for the statistical detection tier as well as the
+  // deterministic one. Opt-in per rule rather than derived from the data
+  // class, because it costs tens of milliseconds and an operator should be
+  // choosing to spend that rather than discovering they are.
+  bool deep_inspection = 12;
+
   // reason is returned to the caller on a denial. It is written by an operator
   // and is expected to be safe to disclose.
   string reason = 11;

@@ -4,6 +4,7 @@
 .DEFAULT_GOAL := help
 GO  := cd dataplane && go
 UV  := cd controlplane && uv
+NER := cd sidecars/pii-ner && uv
 
 # Demo only. A real deployment supplies this from a secret manager.
 DEMO_PEPPER := local-dev-pepper-not-for-production!!
@@ -17,7 +18,7 @@ help: ## Show this help
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | awk -F':.*?## ' '{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 
 .PHONY: check
-check: check-go check-py cover crosscheck livecheck ## Run every check CI runs
+check: check-go check-py check-ner cover crosscheck livecheck nercheck ## Run every check CI runs
 
 .PHONY: check-go
 check-go: ## Format check, vet and test the Go data plane
@@ -25,8 +26,14 @@ check-go: ## Format check, vet and test the Go data plane
 	./scripts/check-core-imports.sh
 	$(GO) vet ./...
 	$(GO) test -race -count=1 ./...
-	@command -v golangci-lint >/dev/null && (cd dataplane && golangci-lint run) \
-		|| echo "  (golangci-lint not installed; CI will run it — go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest)"
+	@# An if rather than `&& ... || echo`: with the latter, a lint *failure*
+	@# also takes the else branch, so real findings were reported as "not
+	@# installed" and the target still passed.
+	@if command -v golangci-lint >/dev/null; then \
+		cd dataplane && golangci-lint run; \
+	else \
+		echo "  (golangci-lint not installed; CI will run it — go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest)"; \
+	fi
 
 
 .PHONY: check-py
@@ -36,6 +43,13 @@ check-py: ## Lint, type check and test the Python control plane
 	$(UV) run mypy
 	$(UV) run pytest
 
+.PHONY: check-ner
+check-ner: ## Lint, type check and test the PII NER sidecar
+	$(NER) run ruff check .
+	$(NER) run ruff format --check .
+	$(NER) run mypy
+	$(NER) run pytest
+
 .PHONY: crosscheck
 crosscheck: ## Prove the Python builder and the Go worker agree on the snapshot
 	./scripts/cross-language-check.sh
@@ -43,6 +57,10 @@ crosscheck: ## Prove the Python builder and the Go worker agree on the snapshot
 .PHONY: livecheck
 livecheck: ## Prove configuration reaches a running worker, and survives a control-plane outage
 	./scripts/live-subscription-check.sh
+
+.PHONY: nercheck
+nercheck: ## Prove the Go client and the Python sidecar agree about byte offsets
+	./scripts/ner-sidecar-check.sh
 
 .PHONY: proto
 proto: ## Regenerate Go code from proto/ (needs protoc and protoc-gen-go)
@@ -86,10 +104,12 @@ demo: ## Build a demo snapshot and run the gateway on :8080
 	@cd dataplane && GATEWAY_SNAPSHOT_FILE=../snapshot.pb GATEWAY_KEY_PEPPER="$(DEMO_PEPPER)" go run ./cmd/gateway
 
 .PHONY: fmt
-fmt: ## Apply formatting to both halves
+fmt: ## Apply formatting across the repo
 	cd dataplane && gofmt -w .
 	$(UV) run ruff format .
 	$(UV) run ruff check --fix .
+	$(NER) run ruff format .
+	$(NER) run ruff check --fix .
 
 .PHONY: cover
 cover: ## Go coverage report, gated at $(COVERAGE_THRESHOLD)%

@@ -150,3 +150,30 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run mypy
       - run: uv run pytest
+
+  pii-ner:
+    name: PII NER sidecar (Python)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sidecars/pii-ner
+    # Its own job rather than a step in the control-plane one: it is a separate
+    # deployable with its own dependency set, and a failure here should name
+    # the sidecar rather than look like a control-plane regression.
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy
+      - run: uv run pytest
+      # Unit tests on either side pass while the two disagree about offsets:
+      # Python indexes characters, Go indexes bytes, and ASCII hides it. This
+      # runs the real client against the real sidecar.
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: dataplane/go.mod
+      - run: ../../scripts/ner-sidecar-check.sh

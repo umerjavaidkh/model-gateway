@@ -60,6 +60,9 @@ type Rule struct {
 	// constraint — the ordering the design requires.
 	DataClass    core.DataClass
 	MinTrustTier core.TrustTier
+	// DeepInspection asks for the statistical detection tier as well as the
+	// deterministic one.
+	DeepInspection bool
 
 	Reason string
 }
@@ -99,8 +102,9 @@ type Decision struct {
 	Reason string
 	// DataClass and MinTrustTier are stamped by a matching allow rule and are
 	// zero otherwise, meaning the request's existing values stand.
-	DataClass    core.DataClass
-	MinTrustTier core.TrustTier
+	DataClass      core.DataClass
+	MinTrustTier   core.TrustTier
+	DeepInspection bool
 }
 
 // Evaluate returns the first matching rule's effect, or the bundle default.
@@ -118,10 +122,11 @@ func Evaluate(bundle Bundle, in Input) Decision {
 			return Decision{RuleID: rule.ID, Reason: rule.Reason}
 		}
 		return Decision{
-			Allowed:      true,
-			RuleID:       rule.ID,
-			DataClass:    rule.DataClass,
-			MinTrustTier: rule.MinTrustTier,
+			Allowed:        true,
+			RuleID:         rule.ID,
+			DataClass:      rule.DataClass,
+			MinTrustTier:   rule.MinTrustTier,
+			DeepInspection: rule.DeepInspection,
 		}
 	}
 

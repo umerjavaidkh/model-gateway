@@ -73,6 +73,13 @@ type Config struct {
 	// snapshot.
 	KeyPepper []byte
 
+	// NERSocket is the Unix socket of the PII NER sidecar. Without it, policy
+	// rules that ask for deep inspection cannot be honoured, so a worker
+	// meant to serve them must be configured with one — but a worker whose
+	// tenants never ask for it needs no sidecar, which is why this is
+	// optional rather than required.
+	NERSocket string
+
 	ReadTimeout   time.Duration
 	WriteTimeout  time.Duration
 	IdleTimeout   time.Duration
@@ -95,6 +102,7 @@ func Load(getenv Getenv) (Config, error) {
 		OTLPEndpoint:      getenv("GATEWAY_OTLP_ENDPOINT"),
 		RedisURL:          getenv("GATEWAY_REDIS_URL"),
 		Region:            getenv("GATEWAY_REGION"),
+		NERSocket:         getenv("GATEWAY_NER_SOCKET"),
 		OTLPInsecure:      getenv("GATEWAY_OTLP_INSECURE") == "true",
 		TraceSampleRatio:  DefaultTraceSampleRatio,
 		ReadTimeout:       DefaultReadTimeout,
@@ -158,8 +166,9 @@ func firstNonEmpty(values ...string) string {
 func (c Config) String() string {
 	return fmt.Sprintf(
 		"listen=%s snapshot=%s control_plane=%s interval=%s otlp=%s sample=%v redis=%v "+
-			"pepper=<%d bytes redacted> control_plane_token=<%d chars redacted>",
+			"ner_socket=%s pepper=<%d bytes redacted> "+
+			"control_plane_token=<%d chars redacted>",
 		c.ListenAddr, c.SnapshotFile, c.ControlPlaneURL, c.SnapshotInterval,
 		c.OTLPEndpoint, c.TraceSampleRatio, c.RedisURL != "",
-		len(c.KeyPepper), len(c.ControlPlaneToken))
+		c.NERSocket, len(c.KeyPepper), len(c.ControlPlaneToken))
 }

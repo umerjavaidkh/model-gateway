@@ -9,6 +9,7 @@ package gateway
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -48,6 +49,11 @@ type Request struct {
 	// APIKey is the presented credential, exactly as the caller sent it.
 	APIKey string
 	Body   []byte
+
+	// deepInspection is stamped by policy and asks for the statistical
+	// detection tier. Unexported: it is set by the pipeline from the policy
+	// decision, never by a transport, so a caller cannot ask to skip it.
+	deepInspection bool
 }
 
 // Result is a completed call plus everything accounting and logging need.
@@ -81,6 +87,8 @@ type Pipeline struct {
 	guardrails  GuardrailChain
 	policies    *policy.Cache
 	vault       *pii.Vault
+	ner         pii.Detector
+	logger      *slog.Logger
 	region      string
 	// pepper keys the HMAC that turns a presented key secret into the value a
 	// snapshot indexes principals by. It never enters a snapshot, so a stolen
@@ -122,6 +130,22 @@ func WithGuardrails(chain GuardrailChain) Option {
 	return func(p *Pipeline) {
 		if chain != nil {
 			p.guardrails = chain
+		}
+	}
+}
+
+// WithNERDetector enables the statistical detection tier. Without one, a rule
+// asking for deep inspection gets the deterministic tier only — and says so in
+// the log rather than pretending it ran.
+func WithNERDetector(detector pii.Detector) Option {
+	return func(p *Pipeline) { p.ner = detector }
+}
+
+// WithLogger sets where the pipeline reports.
+func WithLogger(logger *slog.Logger) Option {
+	return func(p *Pipeline) {
+		if logger != nil {
+			p.logger = logger
 		}
 	}
 }
@@ -191,6 +215,7 @@ func New(providers ProviderRegistry, credentials CredentialResolver, pepper []by
 		limiter:     unlimited{},
 		guardrails:  inspectNothing{},
 		policies:    policy.NewCache(),
+		logger:      slog.Default(),
 		pepper:      pepper,
 		now:         time.Now,
 	}
@@ -627,6 +652,7 @@ func (p *Pipeline) applyPolicy(
 	if decision.DataClass != "" {
 		principal.DefaultClass = decision.DataClass
 	}
+	req.deepInspection = decision.DeepInspection
 	if decision.MinTrustTier > principal.MinTrustTier {
 		// Only ever raised. A policy that could lower a principal's floor would
 		// let a rule widen access rather than restrict it, which is not what
@@ -710,7 +736,39 @@ func (p *Pipeline) protect(
 		return req.Body, nil, nil
 	}
 
-	result := pii.Transform(req.Body, strategy, p.pepper)
+	detectors := []pii.Detector{pii.Deterministic{}}
+	// A worker with no sidecar is the same situation as a sidecar that failed:
+	// the request asked for a tier that did not run. Treating it as an error
+	// rather than a quiet no-op is what stops a missing GATEWAY_NER_SOCKET
+	// from silently downgrading every classified request in the fleet.
+	var deepErr error
+	if req.deepInspection {
+		if p.ner == nil {
+			deepErr = core.New(core.CodeUnavailable, "this worker has no NER sidecar")
+		} else {
+			detectors = append(detectors, p.ner)
+		}
+	}
+
+	matches, errs := pii.DetectAll(ctx, req.Body, detectors...)
+	if len(errs) > 0 {
+		// The deterministic tier cannot fail, so an error here is the sidecar.
+		deepErr = errs[0]
+	}
+	if deepErr != nil {
+		// Whether this refuses the request depends on the classification: data
+		// that needed the statistical tier must not be sent without it, while
+		// data that only asked for it can proceed on what was found.
+		if strategy == pii.StrategyTokenize {
+			return nil, nil, core.Wrapf(core.CodeUnavailable, deepErr,
+				"deep inspection was required and is unavailable")
+		}
+		p.logger.Warn("deep inspection unavailable; proceeding on deterministic detection",
+			slog.String("request_id", req.Meta.RequestID),
+			slog.String("error", deepErr.Error()))
+	}
+
+	result := pii.TransformMatches(req.Body, matches, strategy, p.pepper)
 	if result.Count == 0 {
 		return req.Body, nil, nil
 	}
