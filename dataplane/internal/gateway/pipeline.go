@@ -13,7 +13,10 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel/codes"
+
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/core"
+	"github.com/umerjavaidkh/model-gateway/dataplane/internal/tracing"
 )
 
 // ProviderRegistry resolves a deployment's provider name to an implementation.
@@ -139,19 +142,25 @@ func (p *Pipeline) Handle(ctx context.Context, snap *core.Snapshot, req *Request
 		p.emitUsage(ctx, snap, req, result, deployment, false, err)
 	}
 
-	principal, err := p.authenticate(snap, req)
+	principal, err := stage(ctx, "authenticate", func() (core.Principal, error) {
+		return p.authenticate(snap, req)
+	})
 	if err != nil {
 		emit(err)
 		return result, err
 	}
 	result.Principal = principal
 
-	if err := p.admit(snap, &principal, req); err != nil {
+	if _, err := stage(ctx, "admit", func() (struct{}, error) {
+		return struct{}{}, p.admit(snap, &principal, req)
+	}); err != nil {
 		emit(err)
 		return result, err
 	}
 
-	deployment, err = p.route(snap, &principal, req)
+	deployment, err = stage(ctx, "route", func() (core.Deployment, error) {
+		return p.route(snap, &principal, req)
+	})
 	if err != nil {
 		emit(err)
 		return result, err
@@ -159,7 +168,9 @@ func (p *Pipeline) Handle(ctx context.Context, snap *core.Snapshot, req *Request
 	result.Deployment = deployment.ID
 	result.Route = deployment.Key
 
-	resp, err := p.adapt(ctx, deployment, req)
+	resp, err := stage(ctx, "adapt", func() (*core.ProviderResponse, error) {
+		return p.adapt(ctx, deployment, req)
+	})
 	if err != nil {
 		emit(err)
 		return result, err
@@ -170,6 +181,24 @@ func (p *Pipeline) Handle(ctx context.Context, snap *core.Snapshot, req *Request
 	result.Usage = resp.Usage
 	emit(nil)
 	return result, nil
+}
+
+// stage runs one pipeline stage inside its own span.
+//
+// The four stages are where the time actually goes; without them a slow
+// request shows only a total, and "the gateway was slow" is not a finding. The
+// error is recorded on the span as well as returned, because a failed stage is
+// what an operator opens the trace to find.
+func stage[T any](ctx context.Context, name string, fn func() (T, error)) (T, error) {
+	_, span := tracing.Tracer().Start(ctx, "gateway."+name)
+	defer span.End()
+
+	result, err := fn()
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, string(core.CodeOf(err)))
+	}
+	return result, err
 }
 
 // emitUsage builds and sends the record for one request.

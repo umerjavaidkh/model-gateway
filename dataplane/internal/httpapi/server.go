@@ -19,10 +19,16 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/core"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/gateway"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/snapshot"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/telemetry"
+	"github.com/umerjavaidkh/model-gateway/dataplane/internal/tracing"
 )
 
 const (
@@ -174,7 +180,23 @@ func (s *Server) handleCompletion(endpoint core.Endpoint) http.HandlerFunc {
 }
 
 func (s *Server) serveCompletion(w http.ResponseWriter, r *http.Request, endpoint core.Endpoint) {
-	requestID := s.newID()
+	// Continue the caller's trace when they sent one, so the gateway appears
+	// inside their span rather than starting an unrelated one.
+	ctx := otel.GetTextMapPropagator().Extract(
+		r.Context(), propagation.HeaderCarrier(r.Header))
+	ctx, span := tracing.Tracer().Start(ctx, "gateway.completion",
+		trace.WithSpanKind(trace.SpanKindServer),
+		trace.WithAttributes(tracing.Attr("gateway.endpoint", string(endpoint))))
+	defer span.End()
+	r = r.WithContext(ctx)
+
+	// The request id *is* the trace id when tracing is on. Two correlation ids
+	// for one request is a support burden with no benefit: a user pastes one
+	// string and it has to find the trace, the usage record and the log line.
+	requestID := tracing.TraceIDFrom(ctx)
+	if requestID == "" {
+		requestID = s.newID()
+	}
 	w.Header().Set(HeaderRequestID, requestID)
 
 	// One lease for the whole request. Every stage then sees the same
@@ -236,15 +258,29 @@ func (s *Server) serveCompletion(w http.ResponseWriter, r *http.Request, endpoin
 		return
 	}
 
+	span.SetAttributes(
+		tracing.Attr("gateway.model", logSafe(parsed.Model)),
+		tracing.Attr("gateway.request_id", requestID),
+	)
+
 	result, err := s.pipeline.Handle(r.Context(), snap, req)
 	if result != nil && result.Principal.Deprecated {
 		w.Header().Set(HeaderWarning, deprecatedKeyWarning)
 	}
 	if err != nil {
+		// The span is what an operator opens when a request failed; recording
+		// the error on it is what makes the failure visible there rather than
+		// only in a log they would have to go and find.
+		span.RecordError(err)
+		span.SetStatus(codes.Error, string(core.CodeOf(err)))
 		writeError(w, s.logger, requestID, err)
 		return
 	}
 
+	span.SetAttributes(
+		tracing.Attr("gateway.deployment", string(result.Deployment)),
+		tracing.Attr("gateway.tenant", string(result.Principal.Tenant)),
+	)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(result.StatusCode)
 	_, _ = w.Write(result.Body)

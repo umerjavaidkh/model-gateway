@@ -31,6 +31,7 @@ dataplane/          Go. The request path: auth -> admit -> route -> adapt.
   internal/httpapi/   HTTP transport. Knows about status codes; decides nothing.
   internal/secrets/   Credential resolution. Secrets never enter a snapshot.
   internal/telemetry/ Usage and audit events, off the request path.
+  internal/tracing/   OpenTelemetry setup. Adopted, not wrapped.
   cmd/gateway/        The worker binary.
   cmd/snapshotgen/    Writes a demo snapshot, so the repo runs without a control plane.
   internal/contracts/ Per-port contract suites; also the plugin admission gate.
@@ -130,12 +131,12 @@ decided and why.
 | M3 — `ProviderPort` for real: OpenAI-compatible adapter, SSE streaming, `SecretsPort` | **done** |
 | M3b — Anthropic adapter and `/v1/messages` | **done** |
 | M4 — Usage events, `TelemetryPort`, Prometheus, cost attribution | **done** |
-| M4b — OTel spans and OTLP export | next |
+| M4b — OTel spans and OTLP export | **done** |
 | M5a — Control plane: domain model, snapshot builder, `gatewayctl` | **done** |
 | M5b — Postgres schema, migrations, repository | **done** |
 | M5c — Admin API, key rotation | **done** |
 | M5d — Snapshot subscriber: worker fetches from the control plane | **done** |
-| M6 — Rate limits and budgets | |
+| M6 — Rate limits and budgets | next |
 | M7 — Router: selection/execution split, circuit breakers, health EWMA | |
 | M8 — `GuardrailPort` and policy engine | |
 | M9 — PII chain | |
