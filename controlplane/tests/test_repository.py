@@ -123,9 +123,7 @@ async def seed(session: AsyncSession) -> None:
     app_key.budgets = [models.KeyBudget(budget_id="monthly")]
     session.add(app_key)
 
-    user_key = models.ApiKey(
-        id="key-user", tenant_id="acme", user_id="user-1", lookup=b"\x02" * 32
-    )
+    user_key = models.ApiKey(id="key-user", tenant_id="acme", user_id="user-1", lookup=b"\x02" * 32)
     user_key.models = [models.KeyModel(model="fast")]
     session.add(user_key)
 
@@ -259,9 +257,7 @@ async def test_what_the_repository_loads_builds_a_valid_snapshot(session: AsyncS
     await seed(session)
     repo = Repository(session)
 
-    snapshot = build_snapshot(
-        await repo.load_fleet(), await repo.load_tenants(), datetime.now(UTC)
-    )
+    snapshot = build_snapshot(await repo.load_fleet(), await repo.load_tenants(), datetime.now(UTC))
 
     assert snapshot.global_layer.version.number == 9
     assert snapshot.global_layer.version.digest.startswith("sha256:")
