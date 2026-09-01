@@ -16,3 +16,4 @@ dist/
 # Local
 .env
 .DS_Store
+snapshot.pb
