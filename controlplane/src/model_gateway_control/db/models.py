@@ -33,6 +33,7 @@ from sqlalchemy import (
     Integer,
     LargeBinary,
     String,
+    Text,
     UniqueConstraint,
     func,
 )
@@ -402,3 +403,28 @@ class FleetState(Base, TimestampMixin):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     policy_bundle_ref: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+
+
+class IdempotencyRecord(Base):
+    """A completed mutation, keyed by the caller's idempotency key.
+
+    The plan calls for idempotency on every mutation because an agent drives
+    this API, and an agent that cannot tell a timeout from a failure will retry.
+    Without this table a retried "issue a key" quietly issues two, and the first
+    one is never returned to anybody.
+
+    ``request_fingerprint`` is stored so that reusing a key with a *different*
+    body is a conflict rather than a silent replay of the wrong response — which
+    would be worse than no idempotency at all.
+    """
+
+    __tablename__ = "idempotency_records"
+
+    key: Mapped[str] = mapped_column(String(255), primary_key=True)
+    endpoint: Mapped[str] = mapped_column(String(255), primary_key=True)
+    request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    status_code: Mapped[int] = mapped_column(Integer, nullable=False)
+    response_body: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

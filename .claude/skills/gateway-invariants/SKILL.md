@@ -60,6 +60,10 @@ that are not are the ones worth re-reading, because nothing will catch them.
   doing it silently is not.
 - **Concurrency changes need a `-race` test.** A performance claim needs a
   benchmark in the repo.
+- **Never put a call inside an `assert`.** `python -O` strips assertions, so the
+  call disappears with them. Bind the result first. The same review catches
+  assertions that are trivially true — `assert response is not None` tests
+  nothing, because every response is.
 - **Coverage is gated at 80%.** Raise it when the code earns it; never lower it
   to make a red build green.
 - **Verify with `make check` and check its exit code.** Piping it into `grep`

@@ -17,6 +17,8 @@ queries anything at request time.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -183,8 +185,21 @@ class Repository:
             min_trust_tier=TrustTier(key.min_trust_tier),
             max_concurrent=key.max_concurrent,
             deprecated=key.deprecated,
-            not_after=key.not_after,
+            not_after=_as_utc(key.not_after),
         )
+
+
+def _as_utc(when: datetime | None) -> datetime | None:
+    """Attach UTC to a naive timestamp from the database.
+
+    Columns are declared timezone-aware, but not every driver honours that —
+    SQLite has no timezone type and returns naive values. Everything written is
+    UTC, so a naive value read back is UTC; saying so here keeps the ambiguity
+    from reaching the domain model, where the next reader would have to guess.
+    """
+    if when is not None and when.tzinfo is None:
+        return when.replace(tzinfo=UTC)
+    return when
 
 
 def _to_deployment(row: models.Deployment) -> Deployment:

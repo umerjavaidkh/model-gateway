@@ -21,7 +21,7 @@ work that stays in the request path is work multiplied by every request forever.
 from __future__ import annotations
 
 import hashlib
-from datetime import datetime
+from datetime import UTC, datetime
 
 from model_gateway_control.domain.budget import Budget, BudgetScope
 from model_gateway_control.domain.catalog import (
@@ -271,6 +271,16 @@ def _encode_principal(p: Principal) -> pb.Principal:
 
 
 def _to_unix_ms(when: datetime) -> int:
+    """Convert to Unix milliseconds, treating a naive datetime as UTC.
+
+    ``datetime.timestamp()`` on a naive value assumes *local* time, so a key
+    expiry read back from a driver that drops timezones would shift by the
+    server's UTC offset — a key expiring hours early or late depending on where
+    the process runs. Everything stored is UTC, so saying so here is the correct
+    reading rather than a guess.
+    """
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=UTC)
     return int(when.timestamp() * 1000)
 
 

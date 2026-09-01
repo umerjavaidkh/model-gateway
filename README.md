@@ -40,6 +40,8 @@ controlplane/       Python. Registry, identity, policy authoring, snapshot compi
   db/                 SQLAlchemy models, Alembic migrations, the repository.
   snapshot/builder.py Domain -> the versioned artifact the data plane serves.
   wire/               Generated protobuf, shared with the data plane.
+  service/            Key lifecycle. What an operation means, testable without HTTP.
+  api/                The admin API. Translation only.
   cli.py              gatewayctl.
 proto/              The snapshot schema. One definition, generated for both.
 examples/           A demo snapshot description.
@@ -131,8 +133,8 @@ decided and why.
 | M4b — OTel spans and OTLP export | |
 | M5a — Control plane: domain model, snapshot builder, `gatewayctl` | **done** |
 | M5b — Postgres schema, migrations, repository | **done** |
-| M5c — Admin API, key rotation | next |
-| M5d — Snapshot subscriber: worker fetches from the control plane | |
+| M5c — Admin API, key rotation | **done** |
+| M5d — Snapshot subscriber: worker fetches from the control plane | next |
 | M6 — Rate limits and budgets | |
 | M7 — Router: selection/execution split, circuit breakers, health EWMA | |
 | M8 — `GuardrailPort` and policy engine | |

@@ -16,9 +16,11 @@ import os
 from pathlib import Path
 
 import pytest
+import pytest_asyncio
 from alembic import command
 from alembic.config import Config
 
+from model_gateway_control.db.models import Base
 from model_gateway_control.db.repository import Repository
 from model_gateway_control.db.session import create_engine, session_factory
 
@@ -26,6 +28,28 @@ pytestmark = pytest.mark.skipif(
     not os.environ.get("GATEWAY_TEST_DATABASE_URL"),
     reason="needs a database that persists across connections",
 )
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def blank_database() -> None:
+    """Remove every trace of a schema before each migration test.
+
+    The other suites build their schema with ``create_all``, which Alembic knows
+    nothing about. Sharing one database with them leaves version bookkeeping
+    that disagrees with the tables actually present, so a migration test that
+    ran second would fail for reasons having nothing to do with migrations.
+
+    Dropping everything — including Alembic's own version table — makes these
+    tests independent of what ran before them, which is what they need in order
+    to be testing the migration rather than the ordering.
+    """
+    engine = create_engine(os.environ["GATEWAY_TEST_DATABASE_URL"])
+    try:
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.drop_all)
+            await connection.exec_driver_sql("DROP TABLE IF EXISTS alembic_version")
+    finally:
+        await engine.dispose()
 
 
 def _alembic_config(url: str) -> Config:
@@ -52,7 +76,6 @@ async def _alembic(url: str, action: str, revision: str) -> None:
 async def test_upgrade_head_produces_a_readable_schema() -> None:
     url = os.environ["GATEWAY_TEST_DATABASE_URL"]
 
-    await _alembic(url, "downgrade", "base")
     await _alembic(url, "upgrade", "head")
 
     engine = create_engine(url)
@@ -76,5 +99,4 @@ async def test_downgrade_is_reversible() -> None:
     url = os.environ["GATEWAY_TEST_DATABASE_URL"]
 
     await _alembic(url, "upgrade", "head")
-    await _alembic(url, "downgrade", "base")
     await _alembic(url, "upgrade", "head")
