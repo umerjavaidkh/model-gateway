@@ -13,6 +13,18 @@
         "capabilities": [
           "streaming"
         ]
+      },
+      {
+        "id": "echo-external",
+        "key": "external-model",
+        "provider": "echo",
+        "endpoint": "in-process",
+        "region": "cloud",
+        "trust_tier": "external",
+        "weight": 100,
+        "capabilities": [
+          "streaming"
+        ]
       }
     ],
     "aliases": [
@@ -20,6 +32,12 @@
         "name": "fast",
         "targets": [
           "echo-model"
+        ]
+      },
+      {
+        "name": "outside",
+        "targets": [
+          "external-model"
         ]
       }
     ],
@@ -43,6 +61,14 @@
       "version": 1,
       "default_effect": "allow",
       "rules": [
+        {
+          "id": "classify-external",
+          "effect": "allow",
+          "models": [
+            "outside"
+          ],
+          "data_class": "confidential"
+        },
         {
           "id": "no-embeddings",
           "effect": "deny",

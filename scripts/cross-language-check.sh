@@ -105,6 +105,30 @@ else
   fail=1
 fi
 
+# The demo policy classifies traffic to an external destination, so the PII
+# chain transforms it. The echo provider chunks at 16 bytes, which means a
+# placeholder is genuinely split across chunks and the streaming restorer is
+# exercised rather than merely present.
+tokenised=$(curl -s -X POST "http://127.0.0.1:$PORT/v1/chat/completions" \
+  -H "Authorization: Bearer $key" \
+  -d '{"model":"outside","messages":[{"role":"user","content":"email ada@example.com"}]}')
+if printf '%s' "$tokenised" | grep -q 'ada@example.com'; then
+  echo "  ok   tokenised data round-tripped back to the caller"
+else
+  echo "  FAIL the caller received a placeholder instead of the original: $tokenised" >&2
+  fail=1
+fi
+
+internal=$(curl -s -X POST "http://127.0.0.1:$PORT/v1/chat/completions" \
+  -H "Authorization: Bearer $key" \
+  -d '{"model":"fast","messages":[{"role":"user","content":"email ada@example.com"}]}')
+if printf '%s' "$internal" | grep -q 'ada@example.com'; then
+  echo "  ok   an internal destination is not transformed"
+else
+  echo "  FAIL an internal destination was redacted needlessly: $internal" >&2
+  fail=1
+fi
+
 # Go verifies the digest Python computed. A mismatch here means the two sides
 # serialize the same message differently.
 version=$(curl -s "http://127.0.0.1:$PORT/readyz")

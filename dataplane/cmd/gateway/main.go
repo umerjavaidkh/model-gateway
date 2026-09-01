@@ -33,6 +33,7 @@ import (
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/guardrails"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/httpapi"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/limits"
+	"github.com/umerjavaidkh/model-gateway/dataplane/internal/pii"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/router"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/secrets"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/snapshot"
@@ -206,6 +207,23 @@ func run(logger *slog.Logger) error {
 	// requests are not lost to a deploy.
 	defer guardrailChain.Wait()
 
+	// The vault holds tokenised originals for the life of a request. It uses
+	// the same store as rate limits, so a deployment that has one has the
+	// other. Without a shared store, tokenising would only work on the worker
+	// that issued the tokens — so a request that would tokenise is redacted
+	// instead: the ability to restore is lost, but nothing unprotected is sent.
+	var vault *pii.Vault
+	if redisClient != nil {
+		vault, err = pii.NewVault(limitStore, 5*time.Minute)
+		if err != nil {
+			return err
+		}
+		logger.Info("token vault enabled", slog.String("store", "redis"))
+	} else {
+		logger.Warn("no token vault",
+			slog.String("note", "tokenised requests will be redacted instead"))
+	}
+
 	rt, err := router.New(providers, router.WithLogger(logger))
 	if err != nil {
 		return err
@@ -228,7 +246,8 @@ func run(logger *slog.Logger) error {
 		gateway.WithLimiter(limiter),
 		gateway.WithRouter(rt),
 		gateway.WithRegion(cfg.Region),
-		gateway.WithGuardrails(guardrailChain))
+		gateway.WithGuardrails(guardrailChain),
+		gateway.WithVault(vault))
 	if err != nil {
 		return err
 	}

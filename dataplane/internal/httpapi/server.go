@@ -378,14 +378,18 @@ func (s *Server) streamCompletion(w http.ResponseWriter, r *http.Request, snap *
 		if chunk.Usage.Input != 0 || chunk.Usage.Output != 0 {
 			usage = chunk.Usage
 		}
-		if len(chunk.Body) > 0 {
+		// Restored before relay. A placeholder can be split across chunks, so
+		// the restorer holds bytes back until it is certain none is forming —
+		// which means an empty return here is "not yet", not "end of stream".
+		body := result.Restorer.Push(chunk.Body)
+		if len(body) > 0 {
 			if ttfb == 0 {
 				// Time to the first token is what a user experiences as
 				// latency; total duration is dominated by how long the answer
 				// is, which is not a performance signal.
 				ttfb = time.Since(streamStarted)
 			}
-			if _, writeErr := fmt.Fprintf(w, "data: %s\n\n", chunk.Body); writeErr != nil {
+			if _, writeErr := fmt.Fprintf(w, "data: %s\n\n", body); writeErr != nil {
 				// The caller hung up. Not an error worth alarming on, but the
 				// upstream call still cost money and is still accounted for.
 				s.logger.Info("client disconnected mid-stream",
@@ -411,6 +415,19 @@ func (s *Server) streamCompletion(w http.ResponseWriter, r *http.Request, snap *
 			flusher.Flush()
 			return
 		}
+	}
+
+	// Whatever the restorer still holds cannot be completed by anything, so it
+	// is released before the terminator. Skipping this drops the tail of every
+	// response that ends near a placeholder.
+	if tail := result.Restorer.Flush(); len(tail) > 0 {
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", tail)
+	}
+	if misses := result.Restorer.Misses(); misses > 0 {
+		// The model altered a placeholder, so the caller received one where a
+		// value was expected. Visible rather than silently guessed at.
+		s.logger.Warn("placeholders were not restored",
+			slog.String("request_id", requestID), slog.Int("count", misses))
 	}
 
 	_, _ = io.WriteString(w, "data: [DONE]\n\n")
