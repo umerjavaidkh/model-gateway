@@ -14,7 +14,16 @@ dependencies = [
 gatewayctl = "model_gateway_control.cli:main"
 
 [dependency-groups]
-dev = ["pytest>=8.3", "pytest-asyncio>=0.24", "mypy>=1.13", "ruff>=0.8", "types-protobuf>=5.28"]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "mypy>=1.13",
+    "ruff>=0.8",
+    "types-protobuf>=5.28",
+    # SQLite is the fast local target for the repository suite; CI runs the
+    # same tests against Postgres, which is the gate.
+    "aiosqlite>=0.20",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -28,7 +37,16 @@ line-length = 100
 src = ["src", "tests"]
 # Generated protobuf bindings are not ours to lint or reformat; regenerating
 # would undo any change made here.
-extend-exclude = ["src/model_gateway_control/wire/snapshot_pb2.py", "src/model_gateway_control/wire/snapshot_pb2.pyi"]
+extend-exclude = [
+    # Generated protobuf bindings are not ours to lint or reformat; regenerating
+    # would undo any change made here.
+    "src/model_gateway_control/wire/snapshot_pb2.py",
+    "src/model_gateway_control/wire/snapshot_pb2.pyi",
+    # Migrations are append-only historical records, mostly written by Alembic's
+    # autogenerate. Reformatting one that has already been applied somewhere
+    # changes a file whose value is that it has not changed.
+    "src/model_gateway_control/db/migrations/versions",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "SIM", "RET", "ARG", "PTH", "RUF"]
@@ -38,7 +56,10 @@ python_version = "3.12"
 strict = true
 warn_unreachable = true
 files = ["src", "tests"]
-exclude = ["src/model_gateway_control/wire/snapshot_pb2\\.pyi?$"]
+exclude = [
+    "src/model_gateway_control/wire/snapshot_pb2\\.pyi?$",
+    "src/model_gateway_control/db/migrations/versions/",
+]
 
 [[tool.mypy.overrides]]
 # The generated bindings are typed by a stub protoc writes, which does not

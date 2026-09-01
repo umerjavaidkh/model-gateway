@@ -37,6 +37,7 @@ dataplane/          Go. The request path: auth -> admit -> route -> adapt.
   internal/adapters/  Concrete port implementations.
 controlplane/       Python. Registry, identity, policy authoring, snapshot compilation.
   domain/             Frozen dataclasses. What the control plane reasons about.
+  db/                 SQLAlchemy models, Alembic migrations, the repository.
   snapshot/builder.py Domain -> the versioned artifact the data plane serves.
   wire/               Generated protobuf, shared with the data plane.
   cli.py              gatewayctl.
@@ -129,8 +130,8 @@ decided and why.
 | M4 — Usage events, `TelemetryPort`, Prometheus, cost attribution | **done** |
 | M4b — OTel spans and OTLP export | |
 | M5a — Control plane: domain model, snapshot builder, `gatewayctl` | **done** |
-| M5b — Postgres schema, identity closure table, repository | next |
-| M5c — Admin API, key rotation | |
+| M5b — Postgres schema, migrations, repository | **done** |
+| M5c — Admin API, key rotation | next |
 | M5d — Snapshot subscriber: worker fetches from the control plane | |
 | M6 — Rate limits and budgets | |
 | M7 — Router: selection/execution split, circuit breakers, health EWMA | |
