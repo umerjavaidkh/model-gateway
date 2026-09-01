@@ -36,6 +36,13 @@ proto: ## Regenerate Go code from proto/ (needs protoc and protoc-gen-go)
 		proto/gateway/v1/snapshot.proto
 	mv dataplane/internal/wire/gatewayv1/gateway/v1/snapshot.pb.go dataplane/internal/wire/gatewayv1/
 	rm -rf dataplane/internal/wire/gatewayv1/gateway
+	# Strip the toolchain version banner. It records which protoc built the
+	# file, which differs between a developer's machine and CI and makes the
+	# drift check fail on a comment rather than on real drift.
+	sed -i.bak -e '/^\/\/ versions:$$/d' -e '/^\/\/[[:space:]]*protoc/d' \
+		dataplane/internal/wire/gatewayv1/snapshot.pb.go
+	rm -f dataplane/internal/wire/gatewayv1/snapshot.pb.go.bak
+	cd dataplane && gofmt -w internal/wire/gatewayv1/snapshot.pb.go
 
 .PHONY: fmt
 fmt: ## Apply formatting to both halves
