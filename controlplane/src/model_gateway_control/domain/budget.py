@@ -7,8 +7,16 @@ from enum import IntEnum
 
 from model_gateway_control.errors import InvalidRequestError
 
+#: Basis points in one whole unit. A basis point is one hundredth of a percent,
+#: so 10,000 of them make 100%. This is a unit definition rather than a tunable,
+#: but it is named because the literal appeared in both the validation bound and
+#: the arithmetic — and a single mistyped 1_000 would make every budget ten
+#: times larger, which nothing would surface until an invoice.
+BASIS_POINTS_PER_UNIT = 10_000
+
 #: Fraction of a hard limit held back, in basis points, so that requests
 #: already streaming when a budget tips can finish without overshooting.
+#: 500 basis points is 5%.
 DEFAULT_HEADROOM_BASIS_POINTS = 500
 
 
@@ -54,11 +62,11 @@ class Budget:
             raise InvalidRequestError(f"budget {self.id!r} has an unset scope")
         if self.limit_micro_usd < 0 or self.spent_micro_usd < 0:
             raise InvalidRequestError(f"budget {self.id!r} has a negative amount")
-        if not 0 <= self.headroom_basis_points <= 10_000:
+        if not 0 <= self.headroom_basis_points <= BASIS_POINTS_PER_UNIT:
             raise InvalidRequestError(f"budget {self.id!r} headroom is out of range")
 
     @property
     def available_micro_usd(self) -> int:
         """Spend remaining before the headroom band begins."""
-        reserved = self.limit_micro_usd * self.headroom_basis_points // 10_000
+        reserved = self.limit_micro_usd * self.headroom_basis_points // BASIS_POINTS_PER_UNIT
         return max(0, self.limit_micro_usd - reserved - self.spent_micro_usd)
