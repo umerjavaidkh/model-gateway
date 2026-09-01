@@ -32,10 +32,20 @@ func TestValidModelName(t *testing.T) {
 
 func TestLogSafe(t *testing.T) {
 	// A value that forges a log entry under a text handler must not survive.
-	forged := "model\nlevel=INFO msg=\"you have been owned\""
+	forged := "model\r\nlevel=INFO msg=\"you have been owned\""
 	got := logSafe(forged)
 	if strings.ContainsAny(got, "\n\r") {
 		t.Fatalf("logSafe left a line break in %q", got)
+	}
+	// The break is escaped rather than dropped, so the log still shows that
+	// something was there — a silently deleted character hides the attempt.
+	if !strings.Contains(got, "\\r\\n") {
+		t.Fatalf("logSafe did not escape the line break visibly: %q", got)
+	}
+	// Other control characters are neutralised too, though they cannot forge an
+	// entry on their own.
+	if strings.ContainsAny(logSafe("a\x00b\x1b[31m"), "\x00\x1b") {
+		t.Fatal("logSafe left a control character in place")
 	}
 
 	if got := logSafe("gpt-4o"); got != "gpt-4o" {

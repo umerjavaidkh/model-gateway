@@ -49,6 +49,20 @@ func validModelName(name string) bool {
 // somewhere else in the file.
 func logSafe(s string) string {
 	s = truncateRunes(s, maxLoggedValueBytes)
+
+	// Carriage return and line feed are the two characters that actually forge
+	// a log entry, and they are replaced explicitly rather than left to the
+	// general pass below. The behaviour is identical either way; the difference
+	// is that a direct replacement is a form static analysers recognise as a
+	// sanitizer. A control a scanner cannot see is one that gets re-reported
+	// every release until somebody dismisses it, and dismissed findings are how
+	// a real one gets missed.
+	s = strings.ReplaceAll(s, "\r", "\\r")
+	s = strings.ReplaceAll(s, "\n", "\\n")
+
+	// Everything else non-printable — NUL, terminal escape sequences — becomes
+	// a replacement character. These do not forge entries but they do corrupt
+	// terminals and log viewers.
 	return strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) {
 			return '�'
