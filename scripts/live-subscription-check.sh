@@ -70,6 +70,12 @@ async def main():
             id="demo-budget", tenant_id="demo", scope=5,
             limit_micro_usd=2000, spent_micro_usd=0, hard=True,
             headroom_basis_points=0))
+        # A dead deployment for the same model. It is registered first, so the
+        # router must fail over to serve anything at all — which is the whole
+        # point of the candidate list.
+        s.add(models.Deployment(
+            id="dead-1", base_model="echo-model", provider="openai-compatible",
+            endpoint="http://127.0.0.1:1/v1", trust_tier=3, weight=100))
         s.add(models.Deployment(
             id="echo-1", base_model="echo-model", provider="echo",
             endpoint="in-process", trust_tier=3, weight=100,
@@ -138,6 +144,31 @@ if [ "${applied:-0}" -ge 1 ]; then
   echo "  ok   the worker applied $applied snapshot(s) while running"
 else
   echo "  FAIL the worker reports no applied snapshots" >&2
+  fail=1
+fi
+
+echo "==> the router fails over around a dead deployment"
+if [ "$(call_gateway "$key")" = "200" ]; then
+  echo "  ok   served despite the first candidate being unreachable"
+else
+  echo "  FAIL a dead first candidate took the whole request down" >&2
+  fail=1
+fi
+
+# Once its breaker opens the dead deployment stops being tried at all, which is
+# what stops it consuming every request's deadline budget.
+opened=0
+for _ in $(seq 1 15); do
+  call_gateway "$key" >/dev/null
+  if curl -s "http://127.0.0.1:$WORKER_PORT/readyz" | grep -q '"breaker_open":true'; then
+    opened=1
+    break
+  fi
+done
+if [ "$opened" -eq 1 ]; then
+  echo "  ok   the breaker opened on the dead deployment"
+else
+  echo "  FAIL the breaker never opened; a dead deployment is still being tried" >&2
   fail=1
 fi
 

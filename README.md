@@ -33,6 +33,7 @@ dataplane/          Go. The request path: auth -> admit -> route -> adapt.
   internal/telemetry/ Usage and audit events, off the request path.
   internal/tracing/   OpenTelemetry setup. Adopted, not wrapped.
   internal/limits/    Rate limiting: a local lease in front of a shared window.
+  internal/router/    Selection and execution: candidates, breakers, failover.
   cmd/gateway/        The worker binary.
   cmd/snapshotgen/    Writes a demo snapshot, so the repo runs without a control plane.
   internal/contracts/ Per-port contract suites; also the plugin admission gate.
@@ -159,7 +160,8 @@ decided and why.
 | M6-pricing — Token classes and cost/price separation | **done** |
 | M6b — Redis `KVStore`, making limits fleet-wide | **done** |
 | M6c — Budgets: accounting consumer folds spend into snapshots | **done** |
-| M7 — Router: selection/execution split, circuit breakers, health EWMA | next |
+| M7a — Router: selection/execution split, circuit breakers, passive health | **done** |
+| M7b — Active health probing, cost and locality objectives | next |
 | M8 — `GuardrailPort` and policy engine | |
 | M9 — PII chain | |
 | M10 — Component registry | |
