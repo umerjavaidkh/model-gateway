@@ -27,15 +27,17 @@ func main() {
 	endpoint := flag.String("endpoint", "", "an OpenAI-compatible base URL to register, e.g. https://api.openai.com/v1")
 	model := flag.String("model", "gpt-4o-mini", "the model id at -endpoint")
 	credential := flag.String("credential", "env:OPENAI_API_KEY", "credential reference for -endpoint")
+	inputCost := flag.Int64("input-cost", 150, "micro-USD per 1k input tokens at -endpoint")
+	outputCost := flag.Int64("output-cost", 600, "micro-USD per 1k output tokens at -endpoint")
 	flag.Parse()
 
-	if err := run(*out, *pepper, *secret, *endpoint, *model, *credential); err != nil {
+	if err := run(*out, *pepper, *secret, *endpoint, *model, *credential, *inputCost, *outputCost); err != nil {
 		fmt.Fprintln(os.Stderr, "snapshotgen:", err)
 		os.Exit(1)
 	}
 }
 
-func run(out, pepper, secret, endpoint, model, credential string) error {
+func run(out, pepper, secret, endpoint, model, credential string, inputCost, outputCost int64) error {
 	if pepper == "" {
 		return errors.New("-pepper is required and must match GATEWAY_KEY_PEPPER")
 	}
@@ -67,7 +69,10 @@ func run(out, pepper, secret, endpoint, model, credential string) error {
 			TrustTier:     core.TrustExternal,
 			CredentialRef: credential,
 			Weight:        100,
-			Capabilities:  []core.Capability{core.CapabilityStreaming},
+			// Priced, so the demo shows real cost attribution. A demo that
+			// always reports zero teaches that the number does not matter.
+			Cost:         core.Cost{InputPer1K: core.MicroUSD(inputCost), OutputPer1K: core.MicroUSD(outputCost)},
+			Capabilities: []core.Capability{core.CapabilityStreaming},
 		})
 		aliases = append(aliases, core.ModelAlias{
 			Name: "real", Targets: []core.RoutingKey{{BaseModel: model}},

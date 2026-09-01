@@ -41,6 +41,10 @@ type UsageEvent struct {
 
 	Deployment DeploymentID
 	Route      RoutingKey
+	// Provider is the adapter that served the call. It is a bounded set, so
+	// unlike the tenant id it is safe as a metrics label.
+	Provider string
+	Stream   bool
 
 	InputTokens  int64
 	OutputTokens int64

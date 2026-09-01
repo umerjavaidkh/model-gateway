@@ -30,6 +30,7 @@ dataplane/          Go. The request path: auth -> admit -> route -> adapt.
   internal/gateway/   The request path, transport-free: auth, admit, route, adapt.
   internal/httpapi/   HTTP transport. Knows about status codes; decides nothing.
   internal/secrets/   Credential resolution. Secrets never enter a snapshot.
+  internal/telemetry/ Usage and audit events, off the request path.
   cmd/gateway/        The worker binary.
   cmd/snapshotgen/    Writes a demo snapshot, so the repo runs without a control plane.
   internal/contracts/ Per-port contract suites; also the plugin admission gate.
@@ -112,8 +113,9 @@ decided and why.
 | M1 — Snapshot: schema, holder, atomic swap, N−1 rollback, file source | **done** |
 | M2 — Data-plane vertical slice: key auth, `/v1/chat/completions`, echo provider | **done** |
 | M3 — `ProviderPort` for real: OpenAI-compatible adapter, SSE streaming, `SecretsPort` | **done** |
-| M3b — Anthropic adapter and `/v1/messages` | next |
-| M4 — Usage events, `TelemetryPort`, OTel spans | |
+| M3b — Anthropic adapter and `/v1/messages` | |
+| M4 — Usage events, `TelemetryPort`, Prometheus, cost attribution | **done** |
+| M4b — OTel spans and OTLP export | |
 | M5 — Control plane: Postgres, identity closure, snapshot builder, admin API | |
 | M6 — Rate limits and budgets | |
 | M7 — Router: selection/execution split, circuit breakers, health EWMA | |

@@ -55,6 +55,15 @@ type Cost struct {
 	OutputPer1K MicroUSD
 }
 
+// For returns what a call costs at this price, given what it consumed.
+//
+// Prices are per thousand tokens, so this divides. Integer division truncates,
+// which under-bills by less than a millionth of a dollar per request and never
+// over-bills — the right direction for a rounding error a customer can see.
+func (c Cost) For(usage TokenUsage) MicroUSD {
+	return (MicroUSD(usage.Input)*c.InputPer1K + MicroUSD(usage.Output)*c.OutputPer1K) / 1000
+}
+
 // Deployment is one reachable endpoint that can serve a RoutingKey.
 //
 // A model with three providers behind it is three Deployments sharing one
