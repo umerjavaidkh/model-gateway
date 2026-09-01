@@ -49,10 +49,24 @@ const (
 	CapabilityEmbeddings  Capability = "embeddings"
 )
 
-// Cost is the price of a deployment, per thousand tokens.
+// Cost is what a deployment charges, per thousand tokens of each class.
+//
+// The classes exist because providers do not bill all input tokens the same:
+// cached input is an order of magnitude cheaper, and writing to a cache is
+// dearer than a plain read. A single input rate bills a request that was 90%
+// cache reads as though it were not, and the provider reported the truth
+// exactly once — in a response nobody kept.
 type Cost struct {
 	InputPer1K  MicroUSD
 	OutputPer1K MicroUSD
+	// CachedInputPer1K applies to input served from a provider's prompt cache.
+	// Zero means unconfigured and falls back to InputPer1K, which over-bills
+	// slightly rather than under-billing — the safe direction for a number a
+	// customer disputes.
+	CachedInputPer1K MicroUSD
+	// CacheWritePer1K applies to input written into a provider's cache, which
+	// costs more than a plain read.
+	CacheWritePer1K MicroUSD
 }
 
 // For returns what a call costs at this price, given what it consumed.
@@ -61,7 +75,23 @@ type Cost struct {
 // which under-bills by less than a millionth of a dollar per request and never
 // over-bills — the right direction for a rounding error a customer can see.
 func (c Cost) For(usage TokenUsage) MicroUSD {
-	return (MicroUSD(usage.Input)*c.InputPer1K + MicroUSD(usage.Output)*c.OutputPer1K) / 1000
+	cached := c.CachedInputPer1K
+	if cached == 0 {
+		// Unconfigured, not free. Billing cached tokens at zero because nobody
+		// set a rate would silently give away the majority of a cache-heavy
+		// workload.
+		cached = c.InputPer1K
+	}
+	write := c.CacheWritePer1K
+	if write == 0 {
+		write = c.InputPer1K
+	}
+
+	total := MicroUSD(usage.Input)*c.InputPer1K +
+		MicroUSD(usage.CachedInput)*cached +
+		MicroUSD(usage.CacheWrite)*write +
+		MicroUSD(usage.Output)*c.OutputPer1K
+	return total / 1000
 }
 
 // Deployment is one reachable endpoint that can serve a RoutingKey.

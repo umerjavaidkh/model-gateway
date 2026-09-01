@@ -97,6 +97,8 @@ def _parse_deployment(raw: dict[str, Any]) -> Deployment:
         cost=Cost(
             input_per_1k_micro_usd=int(raw.get("input_cost_micro_usd", 0)),
             output_per_1k_micro_usd=int(raw.get("output_cost_micro_usd", 0)),
+            cached_input_per_1k_micro_usd=int(raw.get("cached_input_cost_micro_usd", 0)),
+            cache_write_per_1k_micro_usd=int(raw.get("cache_write_cost_micro_usd", 0)),
         ),
         capabilities=tuple(Capability(c) for c in raw.get("capabilities", [])),
     )

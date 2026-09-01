@@ -219,6 +219,8 @@ def _encode_cost(c: Cost) -> pb.Cost:
     return pb.Cost(
         input_per_1k_micro_usd=c.input_per_1k_micro_usd,
         output_per_1k_micro_usd=c.output_per_1k_micro_usd,
+        cached_input_per_1k_micro_usd=c.cached_input_per_1k_micro_usd,
+        cache_write_per_1k_micro_usd=c.cache_write_per_1k_micro_usd,
     )
 
 

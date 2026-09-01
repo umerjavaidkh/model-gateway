@@ -27,6 +27,7 @@ type PrometheusSink struct {
 	requests *prometheus.CounterVec
 	tokens   *prometheus.CounterVec
 	cost     *prometheus.CounterVec
+	price    *prometheus.CounterVec
 	latency  *prometheus.HistogramVec
 	ttfb     *prometheus.HistogramVec
 }
@@ -48,7 +49,14 @@ func NewPrometheusSink(reg prometheus.Registerer) (*PrometheusSink, error) {
 		}, []string{"tier", "provider", "direction"}),
 		cost: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "gateway_cost_micro_usd_total",
-			Help: "Upstream spend in millionths of a US dollar.",
+			Help: "What providers charge us, in millionths of a US dollar.",
+		}, []string{"tier", "provider"}),
+		// Separate from cost so margin is a query rather than an estimate.
+		// Equal to cost until a rate card exists, which is exactly why it is
+		// recorded now: a series that starts later has no history.
+		price: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "gateway_price_micro_usd_total",
+			Help: "What tenants are charged, in millionths of a US dollar.",
 		}, []string{"tier", "provider"}),
 		latency: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name: "gateway_request_duration_seconds",
@@ -65,7 +73,9 @@ func NewPrometheusSink(reg prometheus.Registerer) (*PrometheusSink, error) {
 		}, []string{"tier", "provider"}),
 	}
 
-	for _, c := range []prometheus.Collector{s.requests, s.tokens, s.cost, s.latency, s.ttfb} {
+	for _, c := range []prometheus.Collector{
+		s.requests, s.tokens, s.cost, s.price, s.latency, s.ttfb,
+	} {
 		if err := reg.Register(c); err != nil {
 			return nil, core.Wrap(core.CodeInternal, err, "registering a metric collector")
 		}
@@ -97,14 +107,23 @@ func (s *PrometheusSink) Write(_ context.Context, events []core.Event) error {
 		s.latency.WithLabelValues(tier, outcome, provider, stream).
 			Observe(float64(usage.LatencyMs) / 1000)
 
-		if usage.InputTokens > 0 {
-			s.tokens.WithLabelValues(tier, provider, "input").Add(float64(usage.InputTokens))
-		}
-		if usage.OutputTokens > 0 {
-			s.tokens.WithLabelValues(tier, provider, "output").Add(float64(usage.OutputTokens))
+		// Each class is its own series: a cache hit rate is the ratio between
+		// them, and it is the single biggest lever on what a workload costs.
+		for direction, count := range map[string]int64{
+			"input":        usage.InputTokens,
+			"cached_input": usage.CachedInputTokens,
+			"cache_write":  usage.CacheWriteTokens,
+			"output":       usage.OutputTokens,
+		} {
+			if count > 0 {
+				s.tokens.WithLabelValues(tier, provider, direction).Add(float64(count))
+			}
 		}
 		if usage.CostMicroUSD > 0 {
 			s.cost.WithLabelValues(tier, provider).Add(float64(usage.CostMicroUSD))
+		}
+		if usage.PriceMicroUSD > 0 {
+			s.price.WithLabelValues(tier, provider).Add(float64(usage.PriceMicroUSD))
 		}
 		if usage.TimeToFirstByte > 0 {
 			s.ttfb.WithLabelValues(tier, provider).Observe(usage.TimeToFirstByte.Seconds())

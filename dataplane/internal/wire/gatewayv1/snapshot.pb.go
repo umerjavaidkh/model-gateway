@@ -316,15 +316,27 @@ func (x *RoutingKey) GetAdapterId() string {
 	return ""
 }
 
+// Cost is what a deployment charges, per thousand tokens of each class.
+//
+// Millionths of a US dollar, integer, never floating point: per-token prices
+// are small enough that float rounding reaches the invoice.
+//
+// The classes exist because providers do not bill all input tokens the same.
+// Cached input is an order of magnitude cheaper, and writing to a cache is
+// dearer than a plain read. Recording only a single input rate means a request
+// that was 90% cache reads is billed as though it were not — and the provider
+// told us the truth exactly once, in a response we did not keep.
 type Cost struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Millionths of a US dollar per thousand tokens. Integer, never floating
-	// point: per-token prices are small enough that float rounding reaches the
-	// invoice.
-	InputPer_1KMicroUsd  int64 `protobuf:"varint,1,opt,name=input_per_1k_micro_usd,json=inputPer1kMicroUsd,proto3" json:"input_per_1k_micro_usd,omitempty"`
-	OutputPer_1KMicroUsd int64 `protobuf:"varint,2,opt,name=output_per_1k_micro_usd,json=outputPer1kMicroUsd,proto3" json:"output_per_1k_micro_usd,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	InputPer_1KMicroUsd  int64                  `protobuf:"varint,1,opt,name=input_per_1k_micro_usd,json=inputPer1kMicroUsd,proto3" json:"input_per_1k_micro_usd,omitempty"`
+	OutputPer_1KMicroUsd int64                  `protobuf:"varint,2,opt,name=output_per_1k_micro_usd,json=outputPer1kMicroUsd,proto3" json:"output_per_1k_micro_usd,omitempty"`
+	// Zero means unconfigured, and the caller falls back to the standard input
+	// rate. Falling back over-bills slightly rather than under-billing, which is
+	// the safe direction for a number a customer disputes.
+	CachedInputPer_1KMicroUsd int64 `protobuf:"varint,3,opt,name=cached_input_per_1k_micro_usd,json=cachedInputPer1kMicroUsd,proto3" json:"cached_input_per_1k_micro_usd,omitempty"`
+	CacheWritePer_1KMicroUsd  int64 `protobuf:"varint,4,opt,name=cache_write_per_1k_micro_usd,json=cacheWritePer1kMicroUsd,proto3" json:"cache_write_per_1k_micro_usd,omitempty"`
+	unknownFields             protoimpl.UnknownFields
+	sizeCache                 protoimpl.SizeCache
 }
 
 func (x *Cost) Reset() {
@@ -367,6 +379,20 @@ func (x *Cost) GetInputPer_1KMicroUsd() int64 {
 func (x *Cost) GetOutputPer_1KMicroUsd() int64 {
 	if x != nil {
 		return x.OutputPer_1KMicroUsd
+	}
+	return 0
+}
+
+func (x *Cost) GetCachedInputPer_1KMicroUsd() int64 {
+	if x != nil {
+		return x.CachedInputPer_1KMicroUsd
+	}
+	return 0
+}
+
+func (x *Cost) GetCacheWritePer_1KMicroUsd() int64 {
+	if x != nil {
+		return x.CacheWritePer_1KMicroUsd
 	}
 	return 0
 }
@@ -1335,10 +1361,12 @@ const file_gateway_v1_snapshot_proto_rawDesc = "" +
 	"\n" +
 	"base_model\x18\x01 \x01(\tR\tbaseModel\x12\x1d\n" +
 	"\n" +
-	"adapter_id\x18\x02 \x01(\tR\tadapterId\"p\n" +
+	"adapter_id\x18\x02 \x01(\tR\tadapterId\"\xf0\x01\n" +
 	"\x04Cost\x122\n" +
 	"\x16input_per_1k_micro_usd\x18\x01 \x01(\x03R\x12inputPer1kMicroUsd\x124\n" +
-	"\x17output_per_1k_micro_usd\x18\x02 \x01(\x03R\x13outputPer1kMicroUsd\"\xd5\x02\n" +
+	"\x17output_per_1k_micro_usd\x18\x02 \x01(\x03R\x13outputPer1kMicroUsd\x12?\n" +
+	"\x1dcached_input_per_1k_micro_usd\x18\x03 \x01(\x03R\x18cachedInputPer1kMicroUsd\x12=\n" +
+	"\x1ccache_write_per_1k_micro_usd\x18\x04 \x01(\x03R\x17cacheWritePer1kMicroUsd\"\xd5\x02\n" +
 	"\n" +
 	"Deployment\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12(\n" +

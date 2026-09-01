@@ -203,10 +203,18 @@ func upstreamError(resp *http.Response) error {
 }
 
 // usage is the shape providers report token counts in.
+//
+// prompt_tokens is the *total* input including anything served from cache, and
+// prompt_tokens_details.cached_tokens is a subset of it. Anthropic reports the
+// opposite convention, which is exactly why TokenUsage normalizes: downstream
+// code should not have to know which provider it came from.
 type usage struct {
 	Usage struct {
 		PromptTokens     int64 `json:"prompt_tokens"`
 		CompletionTokens int64 `json:"completion_tokens"`
+		PromptDetails    struct {
+			CachedTokens int64 `json:"cached_tokens"`
+		} `json:"prompt_tokens_details"`
 	} `json:"usage"`
 }
 
@@ -220,7 +228,18 @@ func usageFrom(body []byte) core.TokenUsage {
 	if err := json.Unmarshal(body, &u); err != nil {
 		return core.TokenUsage{}
 	}
-	return core.TokenUsage{Input: u.Usage.PromptTokens, Output: u.Usage.CompletionTokens}
+
+	cached := u.Usage.PromptDetails.CachedTokens
+	// Subtracted because prompt_tokens includes the cached ones. Clamped
+	// because a provider reporting more cached than total is malfunctioning,
+	// and a negative input count would surface as a credit on an invoice.
+	standard := max(u.Usage.PromptTokens-cached, 0)
+
+	return core.TokenUsage{
+		Input:       standard,
+		CachedInput: cached,
+		Output:      u.Usage.CompletionTokens,
+	}
 }
 
 // --- streaming --------------------------------------------------------------

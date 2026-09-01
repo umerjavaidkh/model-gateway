@@ -59,17 +59,36 @@ class RoutingKey:
 
 @dataclass(frozen=True, slots=True)
 class Cost:
-    """Price per thousand tokens, in millionths of a US dollar.
+    """Price per thousand tokens of each class, in millionths of a US dollar.
 
     Integer, never float: per-token prices are small enough that float rounding
     reaches the invoice.
+
+    The classes exist because providers do not bill all input tokens the same.
+    Cached input is an order of magnitude cheaper and cache writes are dearer,
+    so a single input rate bills a cache-heavy request as though it were not —
+    and the provider reports the split exactly once, in a response nobody keeps.
+
+    Zero for the cache rates means unconfigured, and the data plane falls back
+    to the standard input rate. That over-bills slightly rather than
+    under-billing, which is the safe direction for a number a customer disputes.
     """
 
     input_per_1k_micro_usd: int = 0
     output_per_1k_micro_usd: int = 0
+    cached_input_per_1k_micro_usd: int = 0
+    cache_write_per_1k_micro_usd: int = 0
 
     def __post_init__(self) -> None:
-        if self.input_per_1k_micro_usd < 0 or self.output_per_1k_micro_usd < 0:
+        if (
+            min(
+                self.input_per_1k_micro_usd,
+                self.output_per_1k_micro_usd,
+                self.cached_input_per_1k_micro_usd,
+                self.cache_write_per_1k_micro_usd,
+            )
+            < 0
+        ):
             raise InvalidRequestError("a price cannot be negative")
 
 
