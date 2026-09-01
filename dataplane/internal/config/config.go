@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/core"
@@ -16,6 +17,11 @@ const (
 	DefaultWriteTimeout  = 5 * time.Minute // long, because model responses are
 	DefaultIdleTimeout   = 120 * time.Second
 	DefaultShutdownGrace = 30 * time.Second
+	// DefaultTraceSampleRatio records a tenth of the traces this worker starts.
+	// Not all of them: a gateway at any real rate would drown a collector.
+	// Not fewer: a rare error is worth catching. Deciding which traces are
+	// interesting is a collector's tail-sampling job, and this is what feeds it.
+	DefaultTraceSampleRatio = 0.1
 	// DefaultSnapshotInterval sits inside the plan's 30-second propagation
 	// ceiling with room for one failed attempt.
 	DefaultSnapshotInterval = 15 * time.Second
@@ -40,6 +46,16 @@ type Config struct {
 	ControlPlaneToken string
 	// SnapshotInterval is how often the control plane is polled.
 	SnapshotInterval time.Duration
+
+	// OTLPEndpoint is the collector traces are exported to. Empty disables
+	// tracing: a worker must not fail or stall because no collector was
+	// configured.
+	OTLPEndpoint string
+	// OTLPInsecure sends without TLS, for a collector in the same pod.
+	OTLPInsecure bool
+	// TraceSampleRatio is the fraction of traces started here that are
+	// recorded. A caller's sampling decision is always honoured regardless.
+	TraceSampleRatio float64
 	// KeyPepper keys the HMAC that turns a presented API key into the value a
 	// snapshot indexes principals by. It must be the same across every worker
 	// and the control plane that issued the keys, and it never enters a
@@ -65,10 +81,26 @@ func Load(getenv Getenv) (Config, error) {
 		ControlPlaneToken: getenv("GATEWAY_CONTROL_PLANE_TOKEN"),
 		KeyPepper:         []byte(getenv("GATEWAY_KEY_PEPPER")),
 		SnapshotInterval:  DefaultSnapshotInterval,
+		OTLPEndpoint:      getenv("GATEWAY_OTLP_ENDPOINT"),
+		OTLPInsecure:      getenv("GATEWAY_OTLP_INSECURE") == "true",
+		TraceSampleRatio:  DefaultTraceSampleRatio,
 		ReadTimeout:       DefaultReadTimeout,
 		WriteTimeout:      DefaultWriteTimeout,
 		IdleTimeout:       DefaultIdleTimeout,
 		ShutdownGrace:     DefaultShutdownGrace,
+	}
+
+	if raw := getenv("GATEWAY_TRACE_SAMPLE_RATIO"); raw != "" {
+		parsed, err := strconv.ParseFloat(raw, 64)
+		if err != nil {
+			return Config{}, core.Wrap(core.CodeInvalidRequest, err,
+				"GATEWAY_TRACE_SAMPLE_RATIO is not a number")
+		}
+		if parsed <= 0 || parsed > 1 {
+			return Config{}, core.Newf(core.CodeInvalidRequest,
+				"GATEWAY_TRACE_SAMPLE_RATIO must be in (0, 1], got %v", parsed)
+		}
+		cfg.TraceSampleRatio = parsed
 	}
 
 	if raw := getenv("GATEWAY_SNAPSHOT_INTERVAL"); raw != "" {
@@ -112,8 +144,9 @@ func firstNonEmpty(values ...string) string {
 // leak.
 func (c Config) String() string {
 	return fmt.Sprintf(
-		"listen=%s snapshot=%s control_plane=%s interval=%s "+
+		"listen=%s snapshot=%s control_plane=%s interval=%s otlp=%s sample=%v "+
 			"pepper=<%d bytes redacted> control_plane_token=<%d chars redacted>",
 		c.ListenAddr, c.SnapshotFile, c.ControlPlaneURL, c.SnapshotInterval,
+		c.OTLPEndpoint, c.TraceSampleRatio,
 		len(c.KeyPepper), len(c.ControlPlaneToken))
 }

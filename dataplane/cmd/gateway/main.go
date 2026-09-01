@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -27,7 +28,11 @@ import (
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/secrets"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/snapshot"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/telemetry"
+	"github.com/umerjavaidkh/model-gateway/dataplane/internal/tracing"
 )
+
+// version identifies this build in traces. Set with -ldflags at release time.
+var version = "dev"
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -54,6 +59,30 @@ func run(logger *slog.Logger) error {
 	// so a worker stuck waiting on an unreachable control plane still stops.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Installed before anything else that might be traced, and shut down last,
+	// so spans buffered at exit are flushed rather than lost.
+	shutdownTracing, err := tracing.Setup(ctx, tracing.Config{
+		Endpoint:    cfg.OTLPEndpoint,
+		Insecure:    cfg.OTLPInsecure,
+		SampleRatio: cfg.TraceSampleRatio,
+		Version:     version,
+	})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		flush, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTracing(flush); err != nil {
+			logger.Error("flushing traces", slog.String("error", err.Error()))
+		}
+	}()
+	if cfg.OTLPEndpoint != "" {
+		logger.Info("tracing enabled",
+			slog.String("endpoint", cfg.OTLPEndpoint),
+			slog.Float64("sample_ratio", cfg.TraceSampleRatio))
+	}
 
 	initial, err := bootstrap(ctx, cfg, logger)
 	if err != nil {
