@@ -27,6 +27,10 @@ dataplane/          Go. The request path: auth -> admit -> route -> adapt.
   internal/core/      Domain vocabulary: types, errors, ports, snapshot.
   internal/snapshot/  Worker-side holder: what the current configuration is.
   internal/wire/      Snapshot wire format and its mapping to domain types.
+  internal/gateway/   The request path, transport-free: auth, admit, route, adapt.
+  internal/httpapi/   HTTP transport. Knows about status codes; decides nothing.
+  cmd/gateway/        The worker binary.
+  cmd/snapshotgen/    Writes a demo snapshot, so the repo runs without a control plane.
   internal/contracts/ Per-port contract suites; also the plugin admission gate.
   internal/adapters/  Concrete port implementations.
 controlplane/       Python. Registry, identity, policy authoring, snapshot compilation.
@@ -44,6 +48,26 @@ pod. We have not measured ourselves against those yet and will publish real
 numbers from a load harness checked into this repo rather than restating
 aspirational ones. What we will hold to is the architectural constraint behind
 them: **the amount of work that runs synchronously in the request path**.
+
+## Try it
+
+```bash
+make demo
+```
+
+That writes a demo snapshot with one echo provider and one API key, then runs
+the gateway on `:8080`. In another terminal:
+
+```bash
+curl -s localhost:8080/v1/chat/completions \
+  -H 'Authorization: Bearer gw_demo_demo-secret' \
+  -d '{"model":"fast","messages":[{"role":"user","content":"hi"}]}'
+```
+
+The echo provider returns the request back, which is the point: the whole path —
+key authentication, model allowlist, budget check, trust-tier filtering, routing
+and the provider call — runs with no network and no database. `curl
+localhost:8080/readyz` reports which snapshot version is serving.
 
 ## Working on it
 
@@ -72,16 +96,14 @@ decided and why.
 | Module | State |
 |---|---|
 | M0 — Foundation: vocabulary, ports, layered snapshot | **done** |
-| M1 — Snapshot holder: atomic swap, lease-based drain, N−1 rollback | **done** |
-| M2a — Snapshot wire format: Protobuf schema, codec, digests | **done** |
-| M2b — Snapshot subscriber: fetch, watch, apply | next |
-| M2 — Data-plane vertical slice | |
-| M3 — `ProviderPort` for real: LiteLLM, streaming | |
-| M4 — Usage events and telemetry | |
-| M5 — Control plane: Postgres, identity, snapshot builder | |
+| M1 — Snapshot: schema, holder, atomic swap, N−1 rollback, file source | **done** |
+| M2 — Data-plane vertical slice: key auth, `/v1/chat/completions`, echo provider | **done** |
+| M3 — `ProviderPort` for real: LiteLLM adapter, SSE streaming | next |
+| M4 — Usage events, `TelemetryPort`, OTel spans | |
+| M5 — Control plane: Postgres, identity closure, snapshot builder, admin API | |
 | M6 — Rate limits and budgets | |
-| M7 — Router: selection, execution, circuit breakers | |
-| M8 — Guardrails and policy | |
+| M7 — Router: selection/execution split, circuit breakers, health EWMA | |
+| M8 — `GuardrailPort` and policy engine | |
 | M9 — PII chain | |
 | M10 — Component registry | |
 | M11+ — Fine-tuning | |

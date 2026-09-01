@@ -5,6 +5,9 @@
 GO  := cd dataplane && go
 UV  := cd controlplane && uv
 
+# Demo only. A real deployment supplies this from a secret manager.
+DEMO_PEPPER := local-dev-pepper-not-for-production!!
+
 .PHONY: help
 help: ## Show this help
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | awk -F':.*?## ' '{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -43,6 +46,16 @@ proto: ## Regenerate Go code from proto/ (needs protoc and protoc-gen-go)
 		dataplane/internal/wire/gatewayv1/snapshot.pb.go
 	rm -f dataplane/internal/wire/gatewayv1/snapshot.pb.go.bak
 	cd dataplane && gofmt -w internal/wire/gatewayv1/snapshot.pb.go
+
+.PHONY: demo
+demo: ## Build a demo snapshot and run the gateway on :8080
+	@cd dataplane && go run ./cmd/snapshotgen -out ../snapshot.pb -pepper "$(DEMO_PEPPER)" -secret demo-secret
+	@echo
+	@echo "  curl -s localhost:8080/v1/chat/completions \\"
+	@echo "    -H 'Authorization: Bearer gw_demo_demo-secret' \\"
+	@echo "    -d '{\"model\":\"fast\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}'"
+	@echo
+	@cd dataplane && GATEWAY_SNAPSHOT_FILE=../snapshot.pb GATEWAY_KEY_PEPPER="$(DEMO_PEPPER)" go run ./cmd/gateway
 
 .PHONY: fmt
 fmt: ## Apply formatting to both halves
