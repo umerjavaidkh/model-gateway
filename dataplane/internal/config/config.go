@@ -56,6 +56,11 @@ type Config struct {
 	// TraceSampleRatio is the fraction of traces started here that are
 	// recorded. A caller's sampling decision is always honoured regardless.
 	TraceSampleRatio float64
+
+	// RedisURL makes rate limits fleet-wide. Without it limits are enforced
+	// per worker, which is a legitimate deployment rather than a failure, so
+	// this stays optional and the worker says which mode it is in.
+	RedisURL string
 	// KeyPepper keys the HMAC that turns a presented API key into the value a
 	// snapshot indexes principals by. It must be the same across every worker
 	// and the control plane that issued the keys, and it never enters a
@@ -82,6 +87,7 @@ func Load(getenv Getenv) (Config, error) {
 		KeyPepper:         []byte(getenv("GATEWAY_KEY_PEPPER")),
 		SnapshotInterval:  DefaultSnapshotInterval,
 		OTLPEndpoint:      getenv("GATEWAY_OTLP_ENDPOINT"),
+		RedisURL:          getenv("GATEWAY_REDIS_URL"),
 		OTLPInsecure:      getenv("GATEWAY_OTLP_INSECURE") == "true",
 		TraceSampleRatio:  DefaultTraceSampleRatio,
 		ReadTimeout:       DefaultReadTimeout,
@@ -144,9 +150,9 @@ func firstNonEmpty(values ...string) string {
 // leak.
 func (c Config) String() string {
 	return fmt.Sprintf(
-		"listen=%s snapshot=%s control_plane=%s interval=%s otlp=%s sample=%v "+
+		"listen=%s snapshot=%s control_plane=%s interval=%s otlp=%s sample=%v redis=%v "+
 			"pepper=<%d bytes redacted> control_plane_token=<%d chars redacted>",
 		c.ListenAddr, c.SnapshotFile, c.ControlPlaneURL, c.SnapshotInterval,
-		c.OTLPEndpoint, c.TraceSampleRatio,
+		c.OTLPEndpoint, c.TraceSampleRatio, c.RedisURL != "",
 		len(c.KeyPepper), len(c.ControlPlaneToken))
 }

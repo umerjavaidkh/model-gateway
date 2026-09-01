@@ -16,6 +16,22 @@ jobs:
     defaults:
       run:
         working-directory: dataplane
+    # The KVStore contract suite runs against an in-process emulator for speed
+    # and against a real Redis here, which is the gate. An emulator is not the
+    # thing being deployed — its Lua interpreter and its TTL semantics are
+    # reimplementations, and reimplementations differ.
+    services:
+      redis:
+        image: redis:7
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+        ports:
+          - 6379:6379
+    env:
+      GATEWAY_TEST_REDIS_URL: redis://localhost:6379
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -67,6 +83,16 @@ jobs:
   crosslanguage:
     name: Cross-language and live subscription
     runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+        ports:
+          - 6379:6379
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -85,6 +111,9 @@ jobs:
       # survives the control plane going away — a claim that is otherwise only
       # in a design document.
       - run: ./scripts/live-subscription-check.sh
+        env:
+          # Exercises the Redis limiter path end to end, not only in unit tests.
+          GATEWAY_TEST_REDIS_URL: redis://localhost:6379
 
   controlplane:
     name: Control plane (Python)

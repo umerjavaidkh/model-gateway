@@ -86,8 +86,11 @@ curl -sf --retry 40 --retry-delay 1 --retry-connrefused \
 
 echo "==> worker: start, subscribing to the control plane"
 (cd "$ROOT/dataplane" && go build -o "$WORK/gateway" ./cmd/gateway)
+# GATEWAY_REDIS_URL is passed through when the environment provides one, so
+# this check exercises the Redis path in CI and the in-process one locally.
 GATEWAY_CONTROL_PLANE_URL="http://127.0.0.1:$ADMIN_PORT" \
 GATEWAY_CONTROL_PLANE_TOKEN="$ADMIN_TOKEN" \
+GATEWAY_REDIS_URL="${GATEWAY_TEST_REDIS_URL:-}" \
 GATEWAY_KEY_PEPPER="$PEPPER" \
 GATEWAY_LISTEN_ADDR="127.0.0.1:$WORKER_PORT" \
 GATEWAY_SNAPSHOT_INTERVAL="1s" \
