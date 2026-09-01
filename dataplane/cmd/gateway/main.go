@@ -17,6 +17,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"github.com/umerjavaidkh/model-gateway/dataplane/internal/adapters/anthropic"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/adapters/echo"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/adapters/openaicompat"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/config"
@@ -61,7 +62,7 @@ func run(logger *slog.Logger) error {
 
 	// echo stays registered alongside the real adapter: it is what the demo
 	// snapshot and the load harness route to, and it costs nothing to keep.
-	providers, err := gateway.NewStaticProviders(echo.New(), openaicompat.New())
+	providers, err := gateway.NewStaticProviders(echo.New(), openaicompat.New(), anthropic.New())
 	if err != nil {
 		return err
 	}

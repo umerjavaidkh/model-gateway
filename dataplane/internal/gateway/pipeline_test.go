@@ -345,3 +345,83 @@ func TestNoCredentialsRefusesADeploymentThatNeedsOne(t *testing.T) {
 		t.Fatal("expected a deployment needing a credential to be refused")
 	}
 }
+
+// providerOnly is a ProviderPort that serves exactly one API surface, so a test
+// can exercise routing's endpoint filter without a real adapter.
+type providerOnly struct {
+	name     string
+	endpoint core.Endpoint
+}
+
+func (p providerOnly) Name() string               { return p.name }
+func (p providerOnly) Endpoints() []core.Endpoint { return []core.Endpoint{p.endpoint} }
+
+func (providerOnly) Invoke(context.Context, *core.ProviderCall) (*core.ProviderResponse, error) {
+	return &core.ProviderResponse{StatusCode: 200, Body: []byte(`{}`)}, nil
+}
+
+func (providerOnly) Stream(context.Context, *core.ProviderCall) (core.ChunkStream, error) {
+	return nil, core.New(core.CodeInternal, "not used in this test")
+}
+
+func TestRoutingSkipsAnAdapterThatCannotSpeakTheEndpoint(t *testing.T) {
+	// Forwarding an Anthropic body to an OpenAI endpoint produces a confusing
+	// upstream 400. Filtering here turns it into a gateway error that names the
+	// real problem.
+	providers, err := gateway.NewStaticProviders(
+		providerOnly{name: "chat-only", endpoint: core.EndpointChatCompletions},
+	)
+	if err != nil {
+		t.Fatalf("NewStaticProviders: %v", err)
+	}
+	p, err := gateway.New(providers, gateway.NoCredentials{}, pepper,
+		gateway.WithClock(func() time.Time { return now }))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	snap := buildSnapshot(t, snapshotOpts{deployments: []core.Deployment{
+		{ID: "chat-1", Key: routeEcho, Provider: "chat-only", TrustTier: core.TrustInternal, Weight: 100},
+	}})
+
+	req := request("echo-model", "gw_acme_secret-1")
+	if _, err := p.Handle(t.Context(), snap, req); err != nil {
+		t.Fatalf("the chat-completions surface must work: %v", err)
+	}
+
+	req = request("echo-model", "gw_acme_secret-1")
+	req.Meta.Endpoint = core.EndpointMessages
+	_, err = p.Handle(t.Context(), snap, req)
+	if !errors.Is(err, core.ErrEndpointUnsupported) {
+		t.Fatalf("err = %v, want endpoint_unsupported", err)
+	}
+}
+
+func TestEndpointFilteringDoesNotMaskATrustTierRefusal(t *testing.T) {
+	// The two refusals mean different things, and collapsing them would report
+	// a data-residency violation as a missing feature.
+	providers, err := gateway.NewStaticProviders(
+		providerOnly{name: "chat-only", endpoint: core.EndpointChatCompletions},
+	)
+	if err != nil {
+		t.Fatalf("NewStaticProviders: %v", err)
+	}
+	p, err := gateway.New(providers, gateway.NoCredentials{}, pepper,
+		gateway.WithClock(func() time.Time { return now }))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	snap := buildSnapshot(t, snapshotOpts{
+		tenantTier: core.TrustInternal,
+		deployments: []core.Deployment{
+			{ID: "ext-1", Key: routeExternal, Provider: "chat-only", TrustTier: core.TrustExternal, Weight: 100},
+		},
+	})
+
+	req := request("external-model", "gw_acme_secret-1")
+	req.Meta.Endpoint = core.EndpointMessages
+	if _, err := p.Handle(t.Context(), snap, req); !errors.Is(err, core.ErrTrustTierDenied) {
+		t.Fatalf("err = %v, want trust_tier_denied to win", err)
+	}
+}

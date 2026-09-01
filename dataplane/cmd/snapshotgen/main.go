@@ -29,16 +29,37 @@ func main() {
 	credential := flag.String("credential", "env:OPENAI_API_KEY", "credential reference for -endpoint")
 	inputCost := flag.Int64("input-cost", 150, "micro-USD per 1k input tokens at -endpoint")
 	outputCost := flag.Int64("output-cost", 600, "micro-USD per 1k output tokens at -endpoint")
+	anthropicEndpoint := flag.String("anthropic-endpoint", "", "an Anthropic Messages base URL, e.g. https://api.anthropic.com/v1")
+	anthropicModel := flag.String("anthropic-model", "claude-opus-5", "the model id at -anthropic-endpoint")
+	anthropicCredential := flag.String("anthropic-credential", "env:ANTHROPIC_API_KEY", "credential reference for -anthropic-endpoint")
 	flag.Parse()
 
-	if err := run(*out, *pepper, *secret, *endpoint, *model, *credential, *inputCost, *outputCost); err != nil {
+	cfg := demoConfig{
+		out: *out, pepper: *pepper, secret: *secret,
+		endpoint: *endpoint, model: *model, credential: *credential,
+		inputCost: *inputCost, outputCost: *outputCost,
+		anthropicEndpoint: *anthropicEndpoint, anthropicModel: *anthropicModel,
+		anthropicCredential: *anthropicCredential,
+	}
+	if err := run(cfg); err != nil {
 		fmt.Fprintln(os.Stderr, "snapshotgen:", err)
 		os.Exit(1)
 	}
 }
 
-func run(out, pepper, secret, endpoint, model, credential string, inputCost, outputCost int64) error {
-	if pepper == "" {
+// demoConfig groups the flags, which stopped fitting in a parameter list once
+// there were two upstreams to describe.
+type demoConfig struct {
+	out, pepper, secret string
+
+	endpoint, model, credential string
+	inputCost, outputCost       int64
+
+	anthropicEndpoint, anthropicModel, anthropicCredential string
+}
+
+func run(cfg demoConfig) error {
+	if cfg.pepper == "" {
 		return errors.New("-pepper is required and must match GATEWAY_KEY_PEPPER")
 	}
 	now := time.Now().UTC()
@@ -59,23 +80,41 @@ func run(out, pepper, secret, endpoint, model, credential string, inputCost, out
 
 	// A real upstream is opt-in, so the default demo needs no account and no
 	// network. Its trust tier is external, which is what a public API is.
-	if endpoint != "" {
+	if cfg.endpoint != "" {
 		deployments = append(deployments, core.Deployment{
 			ID:            "upstream-1",
-			Key:           core.RoutingKey{BaseModel: model},
+			Key:           core.RoutingKey{BaseModel: cfg.model},
 			Provider:      "openai-compatible",
-			Endpoint:      endpoint,
+			Endpoint:      cfg.endpoint,
 			Region:        "cloud",
 			TrustTier:     core.TrustExternal,
-			CredentialRef: credential,
+			CredentialRef: cfg.credential,
 			Weight:        100,
 			// Priced, so the demo shows real cost attribution. A demo that
 			// always reports zero teaches that the number does not matter.
-			Cost:         core.Cost{InputPer1K: core.MicroUSD(inputCost), OutputPer1K: core.MicroUSD(outputCost)},
+			Cost:         core.Cost{InputPer1K: core.MicroUSD(cfg.inputCost), OutputPer1K: core.MicroUSD(cfg.outputCost)},
 			Capabilities: []core.Capability{core.CapabilityStreaming},
 		})
 		aliases = append(aliases, core.ModelAlias{
-			Name: "real", Targets: []core.RoutingKey{{BaseModel: model}},
+			Name: "real", Targets: []core.RoutingKey{{BaseModel: cfg.model}},
+		})
+	}
+
+	if cfg.anthropicEndpoint != "" {
+		deployments = append(deployments, core.Deployment{
+			ID:            "anthropic-1",
+			Key:           core.RoutingKey{BaseModel: cfg.anthropicModel},
+			Provider:      "anthropic",
+			Endpoint:      cfg.anthropicEndpoint,
+			Region:        "cloud",
+			TrustTier:     core.TrustExternal,
+			CredentialRef: cfg.anthropicCredential,
+			Weight:        100,
+			Cost:          core.Cost{InputPer1K: 3000, OutputPer1K: 15000},
+			Capabilities:  []core.Capability{core.CapabilityStreaming},
+		})
+		aliases = append(aliases, core.ModelAlias{
+			Name: "reasoning", Targets: []core.RoutingKey{{BaseModel: cfg.anthropicModel}},
 		})
 	}
 
@@ -104,7 +143,7 @@ func run(out, pepper, secret, endpoint, model, credential string, inputCost, out
 			DefaultClass: core.DataClassInternal,
 		}},
 		Keys: map[core.KeyLookup]core.KeyID{
-			core.ComputeKeyLookup([]byte(pepper), secret): "demo-key",
+			core.ComputeKeyLookup([]byte(cfg.pepper), cfg.secret): "demo-key",
 		},
 		MinTrustTier: core.TrustExternal,
 	})
@@ -120,12 +159,12 @@ func run(out, pepper, secret, endpoint, model, credential string, inputCost, out
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(out, b, 0o600); err != nil {
+	if err := os.WriteFile(cfg.out, b, 0o600); err != nil {
 		return err
 	}
 
 	fmt.Printf("wrote %s (%d bytes)\napi key: gw_demo_%s\nmodels:  %s\n",
-		out, len(b), secret, strings.Join(modelNames(aliases, deployments), ", "))
+		cfg.out, len(b), cfg.secret, strings.Join(modelNames(aliases, deployments), ", "))
 	return nil
 }
 

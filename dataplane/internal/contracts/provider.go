@@ -35,6 +35,20 @@ func RunProviderSuite(t *testing.T, newPort ProviderFactory, sample SampleCall) 
 		}
 	})
 
+	t.Run("declares at least one endpoint", func(t *testing.T) {
+		// An adapter serving no surface can never be routed to, which is a
+		// wiring bug that would otherwise show up as an unexplained 404.
+		port := newPort(t)
+		if len(port.Endpoints()) == 0 {
+			t.Fatal("Endpoints must name at least one API surface")
+		}
+		for _, e := range port.Endpoints() {
+			if e == "" {
+				t.Fatal("Endpoints contains an empty surface")
+			}
+		}
+	})
+
 	t.Run("invoke returns a response", func(t *testing.T) {
 		port := newPort(t)
 		resp, err := port.Invoke(t.Context(), sample(t))

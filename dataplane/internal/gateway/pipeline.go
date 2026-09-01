@@ -9,6 +9,7 @@ package gateway
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"time"
 
@@ -382,7 +383,7 @@ func (p *Pipeline) route(snap *core.Snapshot, principal *core.Principal, req *Re
 
 	targets := snap.ResolveAlias(principal.Tenant, req.Meta.Model)
 
-	var sawAny, sawServing bool
+	var sawAny, sawServing, sawTier bool
 	for _, target := range targets {
 		for _, d := range snap.Deployments(target) {
 			sawAny = true
@@ -393,7 +394,16 @@ func (p *Pipeline) route(snap *core.Snapshot, principal *core.Principal, req *Re
 			if !d.TrustTier.AtLeast(minTier) {
 				continue
 			}
-			if _, ok := p.providers.Provider(d.Provider); !ok {
+			sawTier = true
+			provider, ok := p.providers.Provider(d.Provider)
+			if !ok {
+				continue
+			}
+			// An adapter that does not speak the caller's API surface would
+			// forward an Anthropic body to an OpenAI endpoint and produce a
+			// confusing upstream 400. Skipping it here turns that into a clear
+			// gateway error naming the real problem.
+			if !servesEndpoint(provider, req.Meta.Endpoint) {
 				continue
 			}
 			return d, nil
@@ -407,10 +417,18 @@ func (p *Pipeline) route(snap *core.Snapshot, principal *core.Principal, req *Re
 		return core.Deployment{}, core.Newf(core.CodeModelNotFound, "no model named %q", req.Meta.Model)
 	case !sawServing:
 		return core.Deployment{}, core.Newf(core.CodeNoCandidates, "no deployment of %q is serving traffic", req.Meta.Model)
-	default:
+	case !sawTier:
 		return core.Deployment{}, core.Newf(core.CodeTrustTierDenied,
 			"no deployment of %q meets the required trust tier %s", req.Meta.Model, minTier)
+	default:
+		return core.Deployment{}, core.Newf(core.CodeEndpointUnsupported,
+			"%q is not served on this endpoint", req.Meta.Model)
 	}
+}
+
+// servesEndpoint reports whether an adapter speaks the requested API surface.
+func servesEndpoint(provider core.ProviderPort, endpoint core.Endpoint) bool {
+	return slices.Contains(provider.Endpoints(), endpoint)
 }
 
 // adapt makes the upstream call.
