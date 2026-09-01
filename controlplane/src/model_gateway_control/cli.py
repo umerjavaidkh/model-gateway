@@ -26,6 +26,7 @@ from model_gateway_control.domain.catalog import (
     TrustTier,
 )
 from model_gateway_control.domain.identity import BudgetRef, Principal, RateLimit, issue_key
+from model_gateway_control.domain.policy import PolicyBundle, PolicyEffect, PolicyRule
 from model_gateway_control.domain.tenant import (
     FailureMode,
     Fleet,
@@ -87,6 +88,7 @@ def _parse_fleet(raw: dict[str, Any]) -> Fleet:
         ),
         default_plugins=tuple(_parse_plugin(p) for p in raw.get("default_plugins", [])),
         default_guardrails=tuple(_parse_guardrail(g) for g in raw.get("default_guardrails", [])),
+        default_policy=_parse_policy(raw.get("default_policy")),
         policy_bundle_ref=raw.get("policy_bundle_ref", ""),
     )
 
@@ -130,6 +132,38 @@ def _parse_plugin(raw: dict[str, Any]) -> PluginBinding:
         component=raw["component"],
         version=raw.get("version", ""),
         config_ref=raw.get("config_ref", ""),
+    )
+
+
+def _parse_policy(raw: dict[str, Any] | None) -> PolicyBundle | None:
+    """Build a bundle, or None when none is declared.
+
+    None rather than an empty bundle: "no policy of my own" falls back to the
+    fleet default, and "an empty policy" deliberately does not.
+    """
+    if raw is None:
+        return None
+    return PolicyBundle(
+        id=raw.get("id", ""),
+        version=int(raw.get("version", 1)),
+        default_effect=PolicyEffect(raw.get("default_effect", "allow")),
+        rules=tuple(_parse_policy_rule(r) for r in raw.get("rules", [])),
+    )
+
+
+def _parse_policy_rule(raw: dict[str, Any]) -> PolicyRule:
+    return PolicyRule(
+        id=raw["id"],
+        effect=PolicyEffect(raw["effect"]),
+        models=tuple(raw.get("models", [])),
+        endpoints=tuple(raw.get("endpoints", [])),
+        roles=tuple(raw.get("roles", [])),
+        regions=tuple(raw.get("regions", [])),
+        source_cidrs=tuple(raw.get("source_cidrs", [])),
+        max_payload_bytes=int(raw.get("max_payload_bytes", 0)),
+        data_class=raw.get("data_class", ""),
+        min_trust_tier=_parse_trust_tier(raw.get("min_trust_tier", "UNSET")),
+        reason=raw.get("reason", ""),
     )
 
 
@@ -207,6 +241,7 @@ def _parse_tenant(raw: dict[str, Any], pepper: bytes) -> tuple[Tenant, list[tupl
         budgets=budgets,
         plugins=tuple(_parse_plugin(p) for p in raw.get("plugins", [])),
         guardrails=tuple(_parse_guardrail(g) for g in raw.get("guardrails", [])),
+        policy=_parse_policy(raw.get("policy")),
         min_trust_tier=_parse_trust_tier(raw.get("min_trust_tier", "EXTERNAL")),
     )
     return tenant, issued

@@ -466,3 +466,54 @@ class UsageRecord(Base):
     cost_micro_usd: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     price_micro_usd: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     outcome: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+
+
+class PolicyRule(Base, TimestampMixin):
+    """One rule of a tenant's policy, in evaluation order.
+
+    ``tenant_id`` is null for the fleet default and set for a tenant's own.
+    ``position`` is the evaluation order, which is the whole of the
+    conflict-resolution semantics — first match wins, so the order an operator
+    wrote is what they get.
+    """
+
+    __tablename__ = "policy_rules"
+    __table_args__ = (UniqueConstraint("tenant_id", "rule_id", name="uq_policy_rules_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[str | None] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    rule_id: Mapped[str] = mapped_column(String(ID_LENGTH), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    effect: Mapped[str] = mapped_column(String(16), nullable=False)
+
+    max_payload_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    data_class: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    min_trust_tier: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    #: Returned to a caller on refusal, so operators write it and nothing
+    #: derives it from the payload.
+    reason: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+
+    conditions: Mapped[list[PolicyCondition]] = relationship(
+        lazy="selectin", cascade="all, delete-orphan"
+    )
+
+
+class PolicyCondition(Base):
+    """One value a rule tests against.
+
+    A single table with a ``kind`` column rather than one table per condition
+    type: the five kinds have identical shape, and five tables would be five
+    joins to read one rule.
+    """
+
+    __tablename__ = "policy_conditions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    rule_id: Mapped[int] = mapped_column(
+        ForeignKey("policy_rules.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    #: model | endpoint | role | region | cidr
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    value: Mapped[str] = mapped_column(String(255), nullable=False)

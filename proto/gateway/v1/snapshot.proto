@@ -118,6 +118,63 @@ enum FailureMode {
   FAILURE_MODE_CLOSED = 2;
 }
 
+// PolicyEffect is what a matching rule does.
+enum PolicyEffect {
+  POLICY_EFFECT_UNSPECIFIED = 0;
+  POLICY_EFFECT_ALLOW = 1;
+  POLICY_EFFECT_DENY = 2;
+}
+
+// PolicyRule is one row of the compiled decision table.
+//
+// Every condition is a set the attribute must be in, and an empty set matches
+// anything. All present conditions must hold, so a rule reads as a conjunction
+// and can be understood without reference to any other rule.
+//
+// This is deliberately not a language: no negation, no recursion, no joins, no
+// data documents. See docs/adr/0006-compiled-policy-not-a-policy-language.md.
+message PolicyRule {
+  string id = 1;
+  PolicyEffect effect = 2;
+
+  // Conditions. Empty means "any".
+  repeated string models = 3;
+  repeated string endpoints = 4;
+  repeated string roles = 5;
+  repeated string regions = 6;
+  // source_cidrs are CIDR blocks the caller's address must fall inside.
+  repeated string source_cidrs = 7;
+  // max_payload_bytes is an upper bound; zero means no bound.
+  uint64 max_payload_bytes = 8;
+
+  // Effects applied when an allow rule matches. Stamping here is what lets
+  // policy decide sensitivity, which the router then turns into a destination
+  // constraint — the ordering the design requires.
+  string data_class = 9;
+  TrustTier min_trust_tier = 10;
+
+  // reason is returned to the caller on a denial. It is written by an operator
+  // and is expected to be safe to disclose.
+  string reason = 11;
+}
+
+// PolicyBundle is the compiled decision table.
+//
+// Compiled in the control plane, never interpreted per request: a gateway that
+// parses policy on every request has put a language runtime in its hot path,
+// which is what the snapshot model exists to avoid.
+message PolicyBundle {
+  string id = 1;
+  uint64 version = 2;
+  // Rules in evaluation order. First match wins, which makes an ordering
+  // an operator can read the whole of the conflict-resolution semantics.
+  repeated PolicyRule rules = 3;
+  // default_effect applies when no rule matches. Allow, because policy is one
+  // control among several and a bundle that denied by default would make
+  // adding the feature an outage.
+  PolicyEffect default_effect = 4;
+}
+
 // GuardrailBinding is one guardrail and the budget it is admitted under.
 //
 // A list rather than one binding per port, because a tenant genuinely runs
@@ -228,6 +285,8 @@ message GlobalLayer {
   string policy_bundle_ref = 7;
   // Guardrails applied to any tenant that declares none of its own.
   repeated GuardrailBinding default_guardrails = 8;
+  // The fleet-wide compiled policy, applied to tenants with none of their own.
+  PolicyBundle default_policy = 9;
 }
 
 // TenantLayer is one tenant's slice: small, and changes constantly. It is
@@ -251,6 +310,10 @@ message TenantLayer {
   // things that can refuse traffic produces a set nobody can predict, and
   // "which guardrails am I actually running" must have a simple answer.
   repeated GuardrailBinding guardrails = 11;
+  // This tenant's compiled policy. Replaces the fleet default rather than
+  // merging, for the same reason guardrails do: two ordered rule lists merged
+  // produce an order nobody can predict.
+  PolicyBundle policy = 12;
 }
 
 // Snapshot is a global layer plus the tenant layers composed onto it. Layers

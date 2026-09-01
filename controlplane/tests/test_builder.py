@@ -295,3 +295,58 @@ def test_an_unknown_guardrail_phase_is_rejected() -> None:
 
     with pytest.raises(InvalidRequestError, match="unknown guardrail phase"):
         GuardrailBinding(component="secret-scan", phases=("midflight",))
+
+
+def test_policy_is_compiled_into_the_snapshot(fleet: Fleet, tenant: Tenant) -> None:
+    # Compiled, never interpreted: the worker receives an ordered table and
+    # scans it rather than parsing rules on every request.
+    from model_gateway_control.domain.policy import PolicyBundle, PolicyEffect, PolicyRule
+
+    guarded = dataclasses.replace(
+        tenant,
+        policy=PolicyBundle(
+            id="acme",
+            rules=(
+                PolicyRule(
+                    id="restrict-sensitive",
+                    effect=PolicyEffect.ALLOW,
+                    models=("llama-3.3-70b",),
+                    data_class="restricted",
+                    min_trust_tier=TrustTier.INTERNAL,
+                ),
+                PolicyRule(
+                    id="deny-outside-corp",
+                    effect=PolicyEffect.DENY,
+                    source_cidrs=("10.0.0.0/8",),
+                    reason="outside the corporate network",
+                ),
+            ),
+        ),
+    )
+
+    snapshot = build_snapshot(fleet, [guarded], BUILT_AT)
+    compiled = snapshot.tenants[0].policy
+
+    assert [r.id for r in compiled.rules] == ["restrict-sensitive", "deny-outside-corp"]
+    assert compiled.rules[0].data_class == "restricted"
+    assert compiled.rules[1].reason == "outside the corporate network"
+
+
+def test_an_unparseable_network_fails_the_build() -> None:
+    # Rejected here rather than at the worker. A network rule that silently
+    # does not apply is a restriction an operator believes is in force, and
+    # finding out at build time costs a failed build rather than a hole.
+    from model_gateway_control.domain.policy import PolicyEffect, PolicyRule
+
+    with pytest.raises(InvalidRequestError, match="unparseable network"):
+        PolicyRule(id="bad", effect=PolicyEffect.DENY, source_cidrs=("10.0.0.0/99",))
+
+
+def test_duplicate_rule_ids_are_rejected() -> None:
+    # Two rules with one id makes "which rule refused this" — the question a
+    # denial exists to answer — unanswerable.
+    from model_gateway_control.domain.policy import PolicyBundle, PolicyEffect, PolicyRule
+
+    rule = PolicyRule(id="same", effect=PolicyEffect.ALLOW)
+    with pytest.raises(InvalidRequestError, match="duplicate policy rule"):
+        PolicyBundle(rules=(rule, rule))

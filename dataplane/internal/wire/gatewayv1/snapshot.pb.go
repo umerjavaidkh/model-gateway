@@ -262,6 +262,56 @@ func (FailureMode) EnumDescriptor() ([]byte, []int) {
 	return file_gateway_v1_snapshot_proto_rawDescGZIP(), []int{3}
 }
 
+// PolicyEffect is what a matching rule does.
+type PolicyEffect int32
+
+const (
+	PolicyEffect_POLICY_EFFECT_UNSPECIFIED PolicyEffect = 0
+	PolicyEffect_POLICY_EFFECT_ALLOW       PolicyEffect = 1
+	PolicyEffect_POLICY_EFFECT_DENY        PolicyEffect = 2
+)
+
+// Enum value maps for PolicyEffect.
+var (
+	PolicyEffect_name = map[int32]string{
+		0: "POLICY_EFFECT_UNSPECIFIED",
+		1: "POLICY_EFFECT_ALLOW",
+		2: "POLICY_EFFECT_DENY",
+	}
+	PolicyEffect_value = map[string]int32{
+		"POLICY_EFFECT_UNSPECIFIED": 0,
+		"POLICY_EFFECT_ALLOW":       1,
+		"POLICY_EFFECT_DENY":        2,
+	}
+)
+
+func (x PolicyEffect) Enum() *PolicyEffect {
+	p := new(PolicyEffect)
+	*p = x
+	return p
+}
+
+func (x PolicyEffect) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (PolicyEffect) Descriptor() protoreflect.EnumDescriptor {
+	return file_gateway_v1_snapshot_proto_enumTypes[4].Descriptor()
+}
+
+func (PolicyEffect) Type() protoreflect.EnumType {
+	return &file_gateway_v1_snapshot_proto_enumTypes[4]
+}
+
+func (x PolicyEffect) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use PolicyEffect.Descriptor instead.
+func (PolicyEffect) EnumDescriptor() ([]byte, []int) {
+	return file_gateway_v1_snapshot_proto_rawDescGZIP(), []int{4}
+}
+
 // LayerVersion identifies one build of one layer. Number orders versions;
 // digest content-addresses the bytes so a worker can skip a re-fetch and two
 // workers claiming the same version can be proven to hold the same layer.
@@ -626,6 +676,224 @@ func (x *ModelAlias) GetTargets() []*RoutingKey {
 	return nil
 }
 
+// PolicyRule is one row of the compiled decision table.
+//
+// Every condition is a set the attribute must be in, and an empty set matches
+// anything. All present conditions must hold, so a rule reads as a conjunction
+// and can be understood without reference to any other rule.
+//
+// This is deliberately not a language: no negation, no recursion, no joins, no
+// data documents. See docs/adr/0006-compiled-policy-not-a-policy-language.md.
+type PolicyRule struct {
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Id     string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Effect PolicyEffect           `protobuf:"varint,2,opt,name=effect,proto3,enum=gateway.v1.PolicyEffect" json:"effect,omitempty"`
+	// Conditions. Empty means "any".
+	Models    []string `protobuf:"bytes,3,rep,name=models,proto3" json:"models,omitempty"`
+	Endpoints []string `protobuf:"bytes,4,rep,name=endpoints,proto3" json:"endpoints,omitempty"`
+	Roles     []string `protobuf:"bytes,5,rep,name=roles,proto3" json:"roles,omitempty"`
+	Regions   []string `protobuf:"bytes,6,rep,name=regions,proto3" json:"regions,omitempty"`
+	// source_cidrs are CIDR blocks the caller's address must fall inside.
+	SourceCidrs []string `protobuf:"bytes,7,rep,name=source_cidrs,json=sourceCidrs,proto3" json:"source_cidrs,omitempty"`
+	// max_payload_bytes is an upper bound; zero means no bound.
+	MaxPayloadBytes uint64 `protobuf:"varint,8,opt,name=max_payload_bytes,json=maxPayloadBytes,proto3" json:"max_payload_bytes,omitempty"`
+	// Effects applied when an allow rule matches. Stamping here is what lets
+	// policy decide sensitivity, which the router then turns into a destination
+	// constraint — the ordering the design requires.
+	DataClass    string    `protobuf:"bytes,9,opt,name=data_class,json=dataClass,proto3" json:"data_class,omitempty"`
+	MinTrustTier TrustTier `protobuf:"varint,10,opt,name=min_trust_tier,json=minTrustTier,proto3,enum=gateway.v1.TrustTier" json:"min_trust_tier,omitempty"`
+	// reason is returned to the caller on a denial. It is written by an operator
+	// and is expected to be safe to disclose.
+	Reason        string `protobuf:"bytes,11,opt,name=reason,proto3" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PolicyRule) Reset() {
+	*x = PolicyRule{}
+	mi := &file_gateway_v1_snapshot_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PolicyRule) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PolicyRule) ProtoMessage() {}
+
+func (x *PolicyRule) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_v1_snapshot_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PolicyRule.ProtoReflect.Descriptor instead.
+func (*PolicyRule) Descriptor() ([]byte, []int) {
+	return file_gateway_v1_snapshot_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *PolicyRule) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *PolicyRule) GetEffect() PolicyEffect {
+	if x != nil {
+		return x.Effect
+	}
+	return PolicyEffect_POLICY_EFFECT_UNSPECIFIED
+}
+
+func (x *PolicyRule) GetModels() []string {
+	if x != nil {
+		return x.Models
+	}
+	return nil
+}
+
+func (x *PolicyRule) GetEndpoints() []string {
+	if x != nil {
+		return x.Endpoints
+	}
+	return nil
+}
+
+func (x *PolicyRule) GetRoles() []string {
+	if x != nil {
+		return x.Roles
+	}
+	return nil
+}
+
+func (x *PolicyRule) GetRegions() []string {
+	if x != nil {
+		return x.Regions
+	}
+	return nil
+}
+
+func (x *PolicyRule) GetSourceCidrs() []string {
+	if x != nil {
+		return x.SourceCidrs
+	}
+	return nil
+}
+
+func (x *PolicyRule) GetMaxPayloadBytes() uint64 {
+	if x != nil {
+		return x.MaxPayloadBytes
+	}
+	return 0
+}
+
+func (x *PolicyRule) GetDataClass() string {
+	if x != nil {
+		return x.DataClass
+	}
+	return ""
+}
+
+func (x *PolicyRule) GetMinTrustTier() TrustTier {
+	if x != nil {
+		return x.MinTrustTier
+	}
+	return TrustTier_TRUST_TIER_UNSPECIFIED
+}
+
+func (x *PolicyRule) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+// PolicyBundle is the compiled decision table.
+//
+// Compiled in the control plane, never interpreted per request: a gateway that
+// parses policy on every request has put a language runtime in its hot path,
+// which is what the snapshot model exists to avoid.
+type PolicyBundle struct {
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Id      string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Version uint64                 `protobuf:"varint,2,opt,name=version,proto3" json:"version,omitempty"`
+	// Rules in evaluation order. First match wins, which makes an ordering
+	// an operator can read the whole of the conflict-resolution semantics.
+	Rules []*PolicyRule `protobuf:"bytes,3,rep,name=rules,proto3" json:"rules,omitempty"`
+	// default_effect applies when no rule matches. Allow, because policy is one
+	// control among several and a bundle that denied by default would make
+	// adding the feature an outage.
+	DefaultEffect PolicyEffect `protobuf:"varint,4,opt,name=default_effect,json=defaultEffect,proto3,enum=gateway.v1.PolicyEffect" json:"default_effect,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PolicyBundle) Reset() {
+	*x = PolicyBundle{}
+	mi := &file_gateway_v1_snapshot_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PolicyBundle) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PolicyBundle) ProtoMessage() {}
+
+func (x *PolicyBundle) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_v1_snapshot_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PolicyBundle.ProtoReflect.Descriptor instead.
+func (*PolicyBundle) Descriptor() ([]byte, []int) {
+	return file_gateway_v1_snapshot_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *PolicyBundle) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *PolicyBundle) GetVersion() uint64 {
+	if x != nil {
+		return x.Version
+	}
+	return 0
+}
+
+func (x *PolicyBundle) GetRules() []*PolicyRule {
+	if x != nil {
+		return x.Rules
+	}
+	return nil
+}
+
+func (x *PolicyBundle) GetDefaultEffect() PolicyEffect {
+	if x != nil {
+		return x.DefaultEffect
+	}
+	return PolicyEffect_POLICY_EFFECT_UNSPECIFIED
+}
+
 // GuardrailBinding is one guardrail and the budget it is admitted under.
 //
 // A list rather than one binding per port, because a tenant genuinely runs
@@ -655,7 +923,7 @@ type GuardrailBinding struct {
 
 func (x *GuardrailBinding) Reset() {
 	*x = GuardrailBinding{}
-	mi := &file_gateway_v1_snapshot_proto_msgTypes[5]
+	mi := &file_gateway_v1_snapshot_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -667,7 +935,7 @@ func (x *GuardrailBinding) String() string {
 func (*GuardrailBinding) ProtoMessage() {}
 
 func (x *GuardrailBinding) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_snapshot_proto_msgTypes[5]
+	mi := &file_gateway_v1_snapshot_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -680,7 +948,7 @@ func (x *GuardrailBinding) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GuardrailBinding.ProtoReflect.Descriptor instead.
 func (*GuardrailBinding) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_snapshot_proto_rawDescGZIP(), []int{5}
+	return file_gateway_v1_snapshot_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *GuardrailBinding) GetComponent() string {
@@ -744,7 +1012,7 @@ type PluginBinding struct {
 
 func (x *PluginBinding) Reset() {
 	*x = PluginBinding{}
-	mi := &file_gateway_v1_snapshot_proto_msgTypes[6]
+	mi := &file_gateway_v1_snapshot_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -756,7 +1024,7 @@ func (x *PluginBinding) String() string {
 func (*PluginBinding) ProtoMessage() {}
 
 func (x *PluginBinding) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_snapshot_proto_msgTypes[6]
+	mi := &file_gateway_v1_snapshot_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -769,7 +1037,7 @@ func (x *PluginBinding) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PluginBinding.ProtoReflect.Descriptor instead.
 func (*PluginBinding) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_snapshot_proto_rawDescGZIP(), []int{6}
+	return file_gateway_v1_snapshot_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *PluginBinding) GetPort() Port {
@@ -816,7 +1084,7 @@ type BudgetState struct {
 
 func (x *BudgetState) Reset() {
 	*x = BudgetState{}
-	mi := &file_gateway_v1_snapshot_proto_msgTypes[7]
+	mi := &file_gateway_v1_snapshot_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -828,7 +1096,7 @@ func (x *BudgetState) String() string {
 func (*BudgetState) ProtoMessage() {}
 
 func (x *BudgetState) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_snapshot_proto_msgTypes[7]
+	mi := &file_gateway_v1_snapshot_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -841,7 +1109,7 @@ func (x *BudgetState) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BudgetState.ProtoReflect.Descriptor instead.
 func (*BudgetState) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_snapshot_proto_rawDescGZIP(), []int{7}
+	return file_gateway_v1_snapshot_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *BudgetState) GetId() string {
@@ -896,7 +1164,7 @@ type BudgetRef struct {
 
 func (x *BudgetRef) Reset() {
 	*x = BudgetRef{}
-	mi := &file_gateway_v1_snapshot_proto_msgTypes[8]
+	mi := &file_gateway_v1_snapshot_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -908,7 +1176,7 @@ func (x *BudgetRef) String() string {
 func (*BudgetRef) ProtoMessage() {}
 
 func (x *BudgetRef) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_snapshot_proto_msgTypes[8]
+	mi := &file_gateway_v1_snapshot_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -921,7 +1189,7 @@ func (x *BudgetRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BudgetRef.ProtoReflect.Descriptor instead.
 func (*BudgetRef) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_snapshot_proto_rawDescGZIP(), []int{8}
+	return file_gateway_v1_snapshot_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *BudgetRef) GetId() string {
@@ -958,7 +1226,7 @@ type RateLimit struct {
 
 func (x *RateLimit) Reset() {
 	*x = RateLimit{}
-	mi := &file_gateway_v1_snapshot_proto_msgTypes[9]
+	mi := &file_gateway_v1_snapshot_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -970,7 +1238,7 @@ func (x *RateLimit) String() string {
 func (*RateLimit) ProtoMessage() {}
 
 func (x *RateLimit) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_snapshot_proto_msgTypes[9]
+	mi := &file_gateway_v1_snapshot_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -983,7 +1251,7 @@ func (x *RateLimit) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RateLimit.ProtoReflect.Descriptor instead.
 func (*RateLimit) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_snapshot_proto_rawDescGZIP(), []int{9}
+	return file_gateway_v1_snapshot_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *RateLimit) GetRequestsPerMinute() uint32 {
@@ -1038,7 +1306,7 @@ type Principal struct {
 
 func (x *Principal) Reset() {
 	*x = Principal{}
-	mi := &file_gateway_v1_snapshot_proto_msgTypes[10]
+	mi := &file_gateway_v1_snapshot_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1050,7 +1318,7 @@ func (x *Principal) String() string {
 func (*Principal) ProtoMessage() {}
 
 func (x *Principal) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_snapshot_proto_msgTypes[10]
+	mi := &file_gateway_v1_snapshot_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1063,7 +1331,7 @@ func (x *Principal) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Principal.ProtoReflect.Descriptor instead.
 func (*Principal) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_snapshot_proto_rawDescGZIP(), []int{10}
+	return file_gateway_v1_snapshot_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *Principal) GetKeyId() string {
@@ -1191,7 +1459,7 @@ type KeyEntry struct {
 
 func (x *KeyEntry) Reset() {
 	*x = KeyEntry{}
-	mi := &file_gateway_v1_snapshot_proto_msgTypes[11]
+	mi := &file_gateway_v1_snapshot_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1203,7 +1471,7 @@ func (x *KeyEntry) String() string {
 func (*KeyEntry) ProtoMessage() {}
 
 func (x *KeyEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_snapshot_proto_msgTypes[11]
+	mi := &file_gateway_v1_snapshot_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1216,7 +1484,7 @@ func (x *KeyEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KeyEntry.ProtoReflect.Descriptor instead.
 func (*KeyEntry) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_snapshot_proto_rawDescGZIP(), []int{11}
+	return file_gateway_v1_snapshot_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *KeyEntry) GetLookup() []byte {
@@ -1248,13 +1516,15 @@ type GlobalLayer struct {
 	PolicyBundleRef string            `protobuf:"bytes,7,opt,name=policy_bundle_ref,json=policyBundleRef,proto3" json:"policy_bundle_ref,omitempty"`
 	// Guardrails applied to any tenant that declares none of its own.
 	DefaultGuardrails []*GuardrailBinding `protobuf:"bytes,8,rep,name=default_guardrails,json=defaultGuardrails,proto3" json:"default_guardrails,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// The fleet-wide compiled policy, applied to tenants with none of their own.
+	DefaultPolicy *PolicyBundle `protobuf:"bytes,9,opt,name=default_policy,json=defaultPolicy,proto3" json:"default_policy,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *GlobalLayer) Reset() {
 	*x = GlobalLayer{}
-	mi := &file_gateway_v1_snapshot_proto_msgTypes[12]
+	mi := &file_gateway_v1_snapshot_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1266,7 +1536,7 @@ func (x *GlobalLayer) String() string {
 func (*GlobalLayer) ProtoMessage() {}
 
 func (x *GlobalLayer) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_snapshot_proto_msgTypes[12]
+	mi := &file_gateway_v1_snapshot_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1279,7 +1549,7 @@ func (x *GlobalLayer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GlobalLayer.ProtoReflect.Descriptor instead.
 func (*GlobalLayer) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_snapshot_proto_rawDescGZIP(), []int{12}
+	return file_gateway_v1_snapshot_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *GlobalLayer) GetVersion() *LayerVersion {
@@ -1338,6 +1608,13 @@ func (x *GlobalLayer) GetDefaultGuardrails() []*GuardrailBinding {
 	return nil
 }
 
+func (x *GlobalLayer) GetDefaultPolicy() *PolicyBundle {
+	if x != nil {
+		return x.DefaultPolicy
+	}
+	return nil
+}
+
 // TenantLayer is one tenant's slice: small, and changes constantly. It is
 // versioned and shipped independently of the global layer, so a budget edit
 // does not reship the catalog to every worker.
@@ -1359,14 +1636,18 @@ type TenantLayer struct {
 	// defaults entirely rather than merging with them: merging two lists of
 	// things that can refuse traffic produces a set nobody can predict, and
 	// "which guardrails am I actually running" must have a simple answer.
-	Guardrails    []*GuardrailBinding `protobuf:"bytes,11,rep,name=guardrails,proto3" json:"guardrails,omitempty"`
+	Guardrails []*GuardrailBinding `protobuf:"bytes,11,rep,name=guardrails,proto3" json:"guardrails,omitempty"`
+	// This tenant's compiled policy. Replaces the fleet default rather than
+	// merging, for the same reason guardrails do: two ordered rule lists merged
+	// produce an order nobody can predict.
+	Policy        *PolicyBundle `protobuf:"bytes,12,opt,name=policy,proto3" json:"policy,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TenantLayer) Reset() {
 	*x = TenantLayer{}
-	mi := &file_gateway_v1_snapshot_proto_msgTypes[13]
+	mi := &file_gateway_v1_snapshot_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1378,7 +1659,7 @@ func (x *TenantLayer) String() string {
 func (*TenantLayer) ProtoMessage() {}
 
 func (x *TenantLayer) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_snapshot_proto_msgTypes[13]
+	mi := &file_gateway_v1_snapshot_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1391,7 +1672,7 @@ func (x *TenantLayer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TenantLayer.ProtoReflect.Descriptor instead.
 func (*TenantLayer) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_snapshot_proto_rawDescGZIP(), []int{13}
+	return file_gateway_v1_snapshot_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *TenantLayer) GetTenant() string {
@@ -1471,6 +1752,13 @@ func (x *TenantLayer) GetGuardrails() []*GuardrailBinding {
 	return nil
 }
 
+func (x *TenantLayer) GetPolicy() *PolicyBundle {
+	if x != nil {
+		return x.Policy
+	}
+	return nil
+}
+
 // Snapshot is a global layer plus the tenant layers composed onto it. Layers
 // are also transferable on their own; this message is the full-fetch form used
 // on worker startup and after a watch stream gap.
@@ -1488,7 +1776,7 @@ type Snapshot struct {
 
 func (x *Snapshot) Reset() {
 	*x = Snapshot{}
-	mi := &file_gateway_v1_snapshot_proto_msgTypes[14]
+	mi := &file_gateway_v1_snapshot_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1500,7 +1788,7 @@ func (x *Snapshot) String() string {
 func (*Snapshot) ProtoMessage() {}
 
 func (x *Snapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_snapshot_proto_msgTypes[14]
+	mi := &file_gateway_v1_snapshot_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1513,7 +1801,7 @@ func (x *Snapshot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Snapshot.ProtoReflect.Descriptor instead.
 func (*Snapshot) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_snapshot_proto_rawDescGZIP(), []int{14}
+	return file_gateway_v1_snapshot_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *Snapshot) GetGlobalLayer() *GlobalLayer {
@@ -1567,7 +1855,27 @@ const file_gateway_v1_snapshot_proto_rawDesc = "" +
 	"\n" +
 	"ModelAlias\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x120\n" +
-	"\atargets\x18\x02 \x03(\v2\x16.gateway.v1.RoutingKeyR\atargets\"\xf8\x01\n" +
+	"\atargets\x18\x02 \x03(\v2\x16.gateway.v1.RoutingKeyR\atargets\"\xf7\x02\n" +
+	"\n" +
+	"PolicyRule\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x120\n" +
+	"\x06effect\x18\x02 \x01(\x0e2\x18.gateway.v1.PolicyEffectR\x06effect\x12\x16\n" +
+	"\x06models\x18\x03 \x03(\tR\x06models\x12\x1c\n" +
+	"\tendpoints\x18\x04 \x03(\tR\tendpoints\x12\x14\n" +
+	"\x05roles\x18\x05 \x03(\tR\x05roles\x12\x18\n" +
+	"\aregions\x18\x06 \x03(\tR\aregions\x12!\n" +
+	"\fsource_cidrs\x18\a \x03(\tR\vsourceCidrs\x12*\n" +
+	"\x11max_payload_bytes\x18\b \x01(\x04R\x0fmaxPayloadBytes\x12\x1d\n" +
+	"\n" +
+	"data_class\x18\t \x01(\tR\tdataClass\x12;\n" +
+	"\x0emin_trust_tier\x18\n" +
+	" \x01(\x0e2\x15.gateway.v1.TrustTierR\fminTrustTier\x12\x16\n" +
+	"\x06reason\x18\v \x01(\tR\x06reason\"\xa7\x01\n" +
+	"\fPolicyBundle\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x18\n" +
+	"\aversion\x18\x02 \x01(\x04R\aversion\x12,\n" +
+	"\x05rules\x18\x03 \x03(\v2\x16.gateway.v1.PolicyRuleR\x05rules\x12?\n" +
+	"\x0edefault_effect\x18\x04 \x01(\x0e2\x18.gateway.v1.PolicyEffectR\rdefaultEffect\"\xf8\x01\n" +
 	"\x10GuardrailBinding\x12\x1c\n" +
 	"\tcomponent\x18\x01 \x01(\tR\tcomponent\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12\x1d\n" +
@@ -1620,7 +1928,7 @@ const file_gateway_v1_snapshot_proto_rawDesc = "" +
 	"\x06limits\x18\x10 \x01(\v2\x15.gateway.v1.RateLimitR\x06limits\"9\n" +
 	"\bKeyEntry\x12\x16\n" +
 	"\x06lookup\x18\x01 \x01(\fR\x06lookup\x12\x15\n" +
-	"\x06key_id\x18\x02 \x01(\tR\x05keyId\"\xac\x04\n" +
+	"\x06key_id\x18\x02 \x01(\tR\x05keyId\"\xed\x04\n" +
 	"\vGlobalLayer\x122\n" +
 	"\aversion\x18\x01 \x01(\v2\x18.gateway.v1.LayerVersionR\aversion\x12'\n" +
 	"\x10built_at_unix_ms\x18\x02 \x01(\x03R\rbuiltAtUnixMs\x128\n" +
@@ -1629,10 +1937,11 @@ const file_gateway_v1_snapshot_proto_rawDesc = "" +
 	"\x0ftenant_prefixes\x18\x05 \x03(\v2+.gateway.v1.GlobalLayer.TenantPrefixesEntryR\x0etenantPrefixes\x12B\n" +
 	"\x0fdefault_plugins\x18\x06 \x03(\v2\x19.gateway.v1.PluginBindingR\x0edefaultPlugins\x12*\n" +
 	"\x11policy_bundle_ref\x18\a \x01(\tR\x0fpolicyBundleRef\x12K\n" +
-	"\x12default_guardrails\x18\b \x03(\v2\x1c.gateway.v1.GuardrailBindingR\x11defaultGuardrails\x1aA\n" +
+	"\x12default_guardrails\x18\b \x03(\v2\x1c.gateway.v1.GuardrailBindingR\x11defaultGuardrails\x12?\n" +
+	"\x0edefault_policy\x18\t \x01(\v2\x18.gateway.v1.PolicyBundleR\rdefaultPolicy\x1aA\n" +
 	"\x13TenantPrefixesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x9b\x04\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xcd\x04\n" +
 	"\vTenantLayer\x12\x16\n" +
 	"\x06tenant\x18\x01 \x01(\tR\x06tenant\x122\n" +
 	"\aversion\x18\x02 \x01(\v2\x18.gateway.v1.LayerVersionR\aversion\x12'\n" +
@@ -1649,7 +1958,8 @@ const file_gateway_v1_snapshot_proto_rawDesc = "" +
 	" \x01(\x0e2\x15.gateway.v1.TrustTierR\fminTrustTier\x12<\n" +
 	"\n" +
 	"guardrails\x18\v \x03(\v2\x1c.gateway.v1.GuardrailBindingR\n" +
-	"guardrails\"y\n" +
+	"guardrails\x120\n" +
+	"\x06policy\x18\f \x01(\v2\x18.gateway.v1.PolicyBundleR\x06policy\"y\n" +
 	"\bSnapshot\x12:\n" +
 	"\fglobal_layer\x18\x01 \x01(\v2\x17.gateway.v1.GlobalLayerR\vglobalLayer\x121\n" +
 	"\atenants\x18\x02 \x03(\v2\x17.gateway.v1.TenantLayerR\atenants*w\n" +
@@ -1677,7 +1987,11 @@ const file_gateway_v1_snapshot_proto_rawDesc = "" +
 	"\vFailureMode\x12\x1c\n" +
 	"\x18FAILURE_MODE_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11FAILURE_MODE_OPEN\x10\x01\x12\x17\n" +
-	"\x13FAILURE_MODE_CLOSED\x10\x02BIZGgithub.com/umerjavaidkh/model-gateway/dataplane/internal/wire/gatewayv1b\x06proto3"
+	"\x13FAILURE_MODE_CLOSED\x10\x02*^\n" +
+	"\fPolicyEffect\x12\x1d\n" +
+	"\x19POLICY_EFFECT_UNSPECIFIED\x10\x00\x12\x17\n" +
+	"\x13POLICY_EFFECT_ALLOW\x10\x01\x12\x16\n" +
+	"\x12POLICY_EFFECT_DENY\x10\x02BIZGgithub.com/umerjavaidkh/model-gateway/dataplane/internal/wire/gatewayv1b\x06proto3"
 
 var (
 	file_gateway_v1_snapshot_proto_rawDescOnce sync.Once
@@ -1691,63 +2005,72 @@ func file_gateway_v1_snapshot_proto_rawDescGZIP() []byte {
 	return file_gateway_v1_snapshot_proto_rawDescData
 }
 
-var file_gateway_v1_snapshot_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_gateway_v1_snapshot_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
+var file_gateway_v1_snapshot_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
+var file_gateway_v1_snapshot_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
 var file_gateway_v1_snapshot_proto_goTypes = []any{
 	(TrustTier)(0),           // 0: gateway.v1.TrustTier
 	(BudgetScope)(0),         // 1: gateway.v1.BudgetScope
 	(Port)(0),                // 2: gateway.v1.Port
 	(FailureMode)(0),         // 3: gateway.v1.FailureMode
-	(*LayerVersion)(nil),     // 4: gateway.v1.LayerVersion
-	(*RoutingKey)(nil),       // 5: gateway.v1.RoutingKey
-	(*Cost)(nil),             // 6: gateway.v1.Cost
-	(*Deployment)(nil),       // 7: gateway.v1.Deployment
-	(*ModelAlias)(nil),       // 8: gateway.v1.ModelAlias
-	(*GuardrailBinding)(nil), // 9: gateway.v1.GuardrailBinding
-	(*PluginBinding)(nil),    // 10: gateway.v1.PluginBinding
-	(*BudgetState)(nil),      // 11: gateway.v1.BudgetState
-	(*BudgetRef)(nil),        // 12: gateway.v1.BudgetRef
-	(*RateLimit)(nil),        // 13: gateway.v1.RateLimit
-	(*Principal)(nil),        // 14: gateway.v1.Principal
-	(*KeyEntry)(nil),         // 15: gateway.v1.KeyEntry
-	(*GlobalLayer)(nil),      // 16: gateway.v1.GlobalLayer
-	(*TenantLayer)(nil),      // 17: gateway.v1.TenantLayer
-	(*Snapshot)(nil),         // 18: gateway.v1.Snapshot
-	nil,                      // 19: gateway.v1.GlobalLayer.TenantPrefixesEntry
+	(PolicyEffect)(0),        // 4: gateway.v1.PolicyEffect
+	(*LayerVersion)(nil),     // 5: gateway.v1.LayerVersion
+	(*RoutingKey)(nil),       // 6: gateway.v1.RoutingKey
+	(*Cost)(nil),             // 7: gateway.v1.Cost
+	(*Deployment)(nil),       // 8: gateway.v1.Deployment
+	(*ModelAlias)(nil),       // 9: gateway.v1.ModelAlias
+	(*PolicyRule)(nil),       // 10: gateway.v1.PolicyRule
+	(*PolicyBundle)(nil),     // 11: gateway.v1.PolicyBundle
+	(*GuardrailBinding)(nil), // 12: gateway.v1.GuardrailBinding
+	(*PluginBinding)(nil),    // 13: gateway.v1.PluginBinding
+	(*BudgetState)(nil),      // 14: gateway.v1.BudgetState
+	(*BudgetRef)(nil),        // 15: gateway.v1.BudgetRef
+	(*RateLimit)(nil),        // 16: gateway.v1.RateLimit
+	(*Principal)(nil),        // 17: gateway.v1.Principal
+	(*KeyEntry)(nil),         // 18: gateway.v1.KeyEntry
+	(*GlobalLayer)(nil),      // 19: gateway.v1.GlobalLayer
+	(*TenantLayer)(nil),      // 20: gateway.v1.TenantLayer
+	(*Snapshot)(nil),         // 21: gateway.v1.Snapshot
+	nil,                      // 22: gateway.v1.GlobalLayer.TenantPrefixesEntry
 }
 var file_gateway_v1_snapshot_proto_depIdxs = []int32{
-	5,  // 0: gateway.v1.Deployment.key:type_name -> gateway.v1.RoutingKey
+	6,  // 0: gateway.v1.Deployment.key:type_name -> gateway.v1.RoutingKey
 	0,  // 1: gateway.v1.Deployment.trust_tier:type_name -> gateway.v1.TrustTier
-	6,  // 2: gateway.v1.Deployment.cost:type_name -> gateway.v1.Cost
-	5,  // 3: gateway.v1.ModelAlias.targets:type_name -> gateway.v1.RoutingKey
-	3,  // 4: gateway.v1.GuardrailBinding.failure_mode:type_name -> gateway.v1.FailureMode
-	2,  // 5: gateway.v1.PluginBinding.port:type_name -> gateway.v1.Port
-	1,  // 6: gateway.v1.BudgetState.scope:type_name -> gateway.v1.BudgetScope
-	1,  // 7: gateway.v1.BudgetRef.scope:type_name -> gateway.v1.BudgetScope
-	12, // 8: gateway.v1.Principal.budgets:type_name -> gateway.v1.BudgetRef
-	0,  // 9: gateway.v1.Principal.min_trust_tier:type_name -> gateway.v1.TrustTier
-	13, // 10: gateway.v1.Principal.limits:type_name -> gateway.v1.RateLimit
-	4,  // 11: gateway.v1.GlobalLayer.version:type_name -> gateway.v1.LayerVersion
-	7,  // 12: gateway.v1.GlobalLayer.deployments:type_name -> gateway.v1.Deployment
-	8,  // 13: gateway.v1.GlobalLayer.aliases:type_name -> gateway.v1.ModelAlias
-	19, // 14: gateway.v1.GlobalLayer.tenant_prefixes:type_name -> gateway.v1.GlobalLayer.TenantPrefixesEntry
-	10, // 15: gateway.v1.GlobalLayer.default_plugins:type_name -> gateway.v1.PluginBinding
-	9,  // 16: gateway.v1.GlobalLayer.default_guardrails:type_name -> gateway.v1.GuardrailBinding
-	4,  // 17: gateway.v1.TenantLayer.version:type_name -> gateway.v1.LayerVersion
-	14, // 18: gateway.v1.TenantLayer.principals:type_name -> gateway.v1.Principal
-	15, // 19: gateway.v1.TenantLayer.keys:type_name -> gateway.v1.KeyEntry
-	8,  // 20: gateway.v1.TenantLayer.alias_overrides:type_name -> gateway.v1.ModelAlias
-	11, // 21: gateway.v1.TenantLayer.budgets:type_name -> gateway.v1.BudgetState
-	10, // 22: gateway.v1.TenantLayer.plugins:type_name -> gateway.v1.PluginBinding
-	0,  // 23: gateway.v1.TenantLayer.min_trust_tier:type_name -> gateway.v1.TrustTier
-	9,  // 24: gateway.v1.TenantLayer.guardrails:type_name -> gateway.v1.GuardrailBinding
-	16, // 25: gateway.v1.Snapshot.global_layer:type_name -> gateway.v1.GlobalLayer
-	17, // 26: gateway.v1.Snapshot.tenants:type_name -> gateway.v1.TenantLayer
-	27, // [27:27] is the sub-list for method output_type
-	27, // [27:27] is the sub-list for method input_type
-	27, // [27:27] is the sub-list for extension type_name
-	27, // [27:27] is the sub-list for extension extendee
-	0,  // [0:27] is the sub-list for field type_name
+	7,  // 2: gateway.v1.Deployment.cost:type_name -> gateway.v1.Cost
+	6,  // 3: gateway.v1.ModelAlias.targets:type_name -> gateway.v1.RoutingKey
+	4,  // 4: gateway.v1.PolicyRule.effect:type_name -> gateway.v1.PolicyEffect
+	0,  // 5: gateway.v1.PolicyRule.min_trust_tier:type_name -> gateway.v1.TrustTier
+	10, // 6: gateway.v1.PolicyBundle.rules:type_name -> gateway.v1.PolicyRule
+	4,  // 7: gateway.v1.PolicyBundle.default_effect:type_name -> gateway.v1.PolicyEffect
+	3,  // 8: gateway.v1.GuardrailBinding.failure_mode:type_name -> gateway.v1.FailureMode
+	2,  // 9: gateway.v1.PluginBinding.port:type_name -> gateway.v1.Port
+	1,  // 10: gateway.v1.BudgetState.scope:type_name -> gateway.v1.BudgetScope
+	1,  // 11: gateway.v1.BudgetRef.scope:type_name -> gateway.v1.BudgetScope
+	15, // 12: gateway.v1.Principal.budgets:type_name -> gateway.v1.BudgetRef
+	0,  // 13: gateway.v1.Principal.min_trust_tier:type_name -> gateway.v1.TrustTier
+	16, // 14: gateway.v1.Principal.limits:type_name -> gateway.v1.RateLimit
+	5,  // 15: gateway.v1.GlobalLayer.version:type_name -> gateway.v1.LayerVersion
+	8,  // 16: gateway.v1.GlobalLayer.deployments:type_name -> gateway.v1.Deployment
+	9,  // 17: gateway.v1.GlobalLayer.aliases:type_name -> gateway.v1.ModelAlias
+	22, // 18: gateway.v1.GlobalLayer.tenant_prefixes:type_name -> gateway.v1.GlobalLayer.TenantPrefixesEntry
+	13, // 19: gateway.v1.GlobalLayer.default_plugins:type_name -> gateway.v1.PluginBinding
+	12, // 20: gateway.v1.GlobalLayer.default_guardrails:type_name -> gateway.v1.GuardrailBinding
+	11, // 21: gateway.v1.GlobalLayer.default_policy:type_name -> gateway.v1.PolicyBundle
+	5,  // 22: gateway.v1.TenantLayer.version:type_name -> gateway.v1.LayerVersion
+	17, // 23: gateway.v1.TenantLayer.principals:type_name -> gateway.v1.Principal
+	18, // 24: gateway.v1.TenantLayer.keys:type_name -> gateway.v1.KeyEntry
+	9,  // 25: gateway.v1.TenantLayer.alias_overrides:type_name -> gateway.v1.ModelAlias
+	14, // 26: gateway.v1.TenantLayer.budgets:type_name -> gateway.v1.BudgetState
+	13, // 27: gateway.v1.TenantLayer.plugins:type_name -> gateway.v1.PluginBinding
+	0,  // 28: gateway.v1.TenantLayer.min_trust_tier:type_name -> gateway.v1.TrustTier
+	12, // 29: gateway.v1.TenantLayer.guardrails:type_name -> gateway.v1.GuardrailBinding
+	11, // 30: gateway.v1.TenantLayer.policy:type_name -> gateway.v1.PolicyBundle
+	19, // 31: gateway.v1.Snapshot.global_layer:type_name -> gateway.v1.GlobalLayer
+	20, // 32: gateway.v1.Snapshot.tenants:type_name -> gateway.v1.TenantLayer
+	33, // [33:33] is the sub-list for method output_type
+	33, // [33:33] is the sub-list for method input_type
+	33, // [33:33] is the sub-list for extension type_name
+	33, // [33:33] is the sub-list for extension extendee
+	0,  // [0:33] is the sub-list for field type_name
 }
 
 func init() { file_gateway_v1_snapshot_proto_init() }
@@ -1760,8 +2083,8 @@ func file_gateway_v1_snapshot_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_gateway_v1_snapshot_proto_rawDesc), len(file_gateway_v1_snapshot_proto_rawDesc)),
-			NumEnums:      4,
-			NumMessages:   16,
+			NumEnums:      5,
+			NumMessages:   18,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

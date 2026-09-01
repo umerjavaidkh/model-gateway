@@ -8,6 +8,7 @@ from enum import StrEnum
 from model_gateway_control.domain.budget import Budget
 from model_gateway_control.domain.catalog import Deployment, ModelAlias, TrustTier
 from model_gateway_control.domain.identity import Principal
+from model_gateway_control.domain.policy import PolicyBundle
 from model_gateway_control.errors import InvalidRequestError
 
 
@@ -87,6 +88,10 @@ class Tenant:
     #: entirely rather than merging: merging two lists of things that can refuse
     #: traffic produces a set nobody can predict.
     guardrails: tuple[GuardrailBinding, ...] = ()
+    #: This tenant's policy. Replaces the fleet default rather than merging,
+    #: for the same reason guardrails do: two ordered rule lists merged produce
+    #: an order nobody can predict.
+    policy: PolicyBundle | None = None
     #: Floor on destination trust for every request from this tenant. Data
     #: residency is expressed here, not as a deployment afterthought.
     min_trust_tier: TrustTier = TrustTier.EXTERNAL
@@ -113,6 +118,8 @@ class Fleet:
     default_plugins: tuple[PluginBinding, ...] = ()
     #: Guardrails applied to any tenant declaring none of its own.
     default_guardrails: tuple[GuardrailBinding, ...] = ()
+    #: Applied to any tenant with no policy of its own.
+    default_policy: PolicyBundle | None = None
     policy_bundle_ref: str = ""
 
     def __post_init__(self) -> None:

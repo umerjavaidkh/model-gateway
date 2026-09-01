@@ -32,6 +32,7 @@ from model_gateway_control.domain.catalog import (
     TrustTier,
 )
 from model_gateway_control.domain.identity import BudgetRef, Principal
+from model_gateway_control.domain.policy import PolicyBundle, PolicyEffect
 from model_gateway_control.domain.tenant import (
     FailureMode,
     Fleet,
@@ -171,6 +172,8 @@ def encode_fleet(fleet: Fleet, tenants: list[Tenant], built_at: datetime) -> pb.
         layer.default_plugins.append(_encode_plugin(binding))
     for guardrail in fleet.default_guardrails:
         layer.default_guardrails.append(_encode_guardrail(guardrail))
+    if fleet.default_policy is not None:
+        layer.default_policy.CopyFrom(_encode_policy(fleet.default_policy))
 
     # The prefix map lives in the global layer because resolving a key must
     # find its tenant before any tenant layer is consulted.
@@ -203,6 +206,8 @@ def encode_tenant(tenant: Tenant, built_at: datetime) -> pb.TenantLayer:
         layer.plugins.append(_encode_plugin(binding))
     for guardrail in tenant.guardrails:
         layer.guardrails.append(_encode_guardrail(guardrail))
+    if tenant.policy is not None:
+        layer.policy.CopyFrom(_encode_policy(tenant.policy))
     return layer
 
 
@@ -245,6 +250,44 @@ def _encode_plugin(b: PluginBinding) -> pb.PluginBinding:
         version=b.version,
         config_ref=b.config_ref,
     )
+
+
+_POLICY_EFFECTS = {
+    PolicyEffect.ALLOW: pb.POLICY_EFFECT_ALLOW,
+    PolicyEffect.DENY: pb.POLICY_EFFECT_DENY,
+}
+
+
+def _encode_policy(bundle: PolicyBundle) -> pb.PolicyBundle:
+    """Compile a bundle into the form the data plane evaluates.
+
+    Compilation is the whole point: the worker receives an ordered table and
+    scans it, rather than parsing rules on every request. Everything that can
+    be decided once — rule order, condition sets, network validity — is decided
+    here.
+    """
+    encoded = pb.PolicyBundle(
+        id=bundle.id,
+        version=bundle.version,
+        default_effect=_POLICY_EFFECTS[bundle.default_effect],
+    )
+    for rule in bundle.rules:
+        encoded.rules.append(
+            pb.PolicyRule(
+                id=rule.id,
+                effect=_POLICY_EFFECTS[rule.effect],
+                models=list(rule.models),
+                endpoints=list(rule.endpoints),
+                roles=list(rule.roles),
+                regions=list(rule.regions),
+                source_cidrs=list(rule.source_cidrs),
+                max_payload_bytes=rule.max_payload_bytes,
+                data_class=rule.data_class,
+                min_trust_tier=_TRUST_TIERS.get(rule.min_trust_tier, pb.TRUST_TIER_UNSPECIFIED),
+                reason=rule.reason,
+            )
+        )
+    return encoded
 
 
 _FAILURE_MODES = {

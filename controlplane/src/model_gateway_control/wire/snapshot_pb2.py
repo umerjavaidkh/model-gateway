@@ -13,7 +13,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x19gateway/v1/snapshot.proto\x12\ngateway.v1\".\n\x0cLayerVersion\x12\x0e\n\x06number\x18\x01 \x01(\x04\x12\x0e\n\x06\x64igest\x18\x02 \x01(\t\"4\n\nRoutingKey\x12\x12\n\nbase_model\x18\x01 \x01(\t\x12\x12\n\nadapter_id\x18\x02 \x01(\t\"\x94\x01\n\x04\x43ost\x12\x1e\n\x16input_per_1k_micro_usd\x18\x01 \x01(\x03\x12\x1f\n\x17output_per_1k_micro_usd\x18\x02 \x01(\x03\x12%\n\x1d\x63\x61\x63hed_input_per_1k_micro_usd\x18\x03 \x01(\x03\x12$\n\x1c\x63\x61\x63he_write_per_1k_micro_usd\x18\x04 \x01(\x03\"\xfa\x01\n\nDeployment\x12\n\n\x02id\x18\x01 \x01(\t\x12#\n\x03key\x18\x02 \x01(\x0b\x32\x16.gateway.v1.RoutingKey\x12\x10\n\x08provider\x18\x03 \x01(\t\x12\x10\n\x08\x65ndpoint\x18\x04 \x01(\t\x12\x0e\n\x06region\x18\x05 \x01(\t\x12)\n\ntrust_tier\x18\x06 \x01(\x0e\x32\x15.gateway.v1.TrustTier\x12\x16\n\x0e\x63redential_ref\x18\x07 \x01(\t\x12\x0e\n\x06weight\x18\x08 \x01(\r\x12\x1e\n\x04\x63ost\x18\t \x01(\x0b\x32\x10.gateway.v1.Cost\x12\x14\n\x0c\x63\x61pabilities\x18\n \x03(\t\"C\n\nModelAlias\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\'\n\x07targets\x18\x02 \x03(\x0b\x32\x16.gateway.v1.RoutingKey\"\xaf\x01\n\x10GuardrailBinding\x12\x11\n\tcomponent\x18\x01 \x01(\t\x12\x0f\n\x07version\x18\x02 \x01(\t\x12\x12\n\nconfig_ref\x18\x03 \x01(\t\x12\x12\n\ntimeout_ms\x18\x04 \x01(\r\x12-\n\x0c\x66\x61ilure_mode\x18\x05 \x01(\x0e\x32\x17.gateway.v1.FailureMode\x12\x10\n\x08\x62locking\x18\x06 \x01(\x08\x12\x0e\n\x06phases\x18\x07 \x03(\t\"g\n\rPluginBinding\x12\x1e\n\x04port\x18\x01 \x01(\x0e\x32\x10.gateway.v1.Port\x12\x11\n\tcomponent\x18\x02 \x01(\t\x12\x0f\n\x07version\x18\x03 \x01(\t\x12\x12\n\nconfig_ref\x18\x04 \x01(\t\"\xa0\x01\n\x0b\x42udgetState\x12\n\n\x02id\x18\x01 \x01(\t\x12&\n\x05scope\x18\x02 \x01(\x0e\x32\x17.gateway.v1.BudgetScope\x12\x17\n\x0flimit_micro_usd\x18\x03 \x01(\x03\x12\x17\n\x0fspent_micro_usd\x18\x04 \x01(\x03\x12\x0c\n\x04hard\x18\x05 \x01(\x08\x12\x1d\n\x15headroom_basis_points\x18\x06 \x01(\r\"?\n\tBudgetRef\x12\n\n\x02id\x18\x01 \x01(\t\x12&\n\x05scope\x18\x02 \x01(\x0e\x32\x17.gateway.v1.BudgetScope\"[\n\tRateLimit\x12\x1b\n\x13requests_per_minute\x18\x01 \x01(\r\x12\x19\n\x11tokens_per_minute\x18\x02 \x01(\r\x12\x16\n\x0emax_concurrent\x18\x03 \x01(\r\"\xfb\x02\n\tPrincipal\x12\x0e\n\x06key_id\x18\x01 \x01(\t\x12\x0e\n\x06tenant\x18\x02 \x01(\t\x12\x0b\n\x03org\x18\x03 \x01(\t\x12\x0c\n\x04team\x18\x04 \x01(\t\x12\x0c\n\x04user\x18\x05 \x01(\t\x12\x0b\n\x03\x61pp\x18\x06 \x01(\t\x12\r\n\x05roles\x18\x07 \x03(\t\x12\x18\n\x10models_allow_all\x18\x08 \x01(\x08\x12\x0e\n\x06models\x18\t \x03(\t\x12&\n\x07\x62udgets\x18\n \x03(\x0b\x32\x15.gateway.v1.BudgetRef\x12\x1a\n\x12\x64\x65\x66\x61ult_data_class\x18\x0b \x01(\t\x12-\n\x0emin_trust_tier\x18\x0c \x01(\x0e\x32\x15.gateway.v1.TrustTier\x12\x16\n\x0emax_concurrent\x18\r \x01(\r\x12\x12\n\ndeprecated\x18\x0e \x01(\x08\x12\x19\n\x11not_after_unix_ms\x18\x0f \x01(\x03\x12%\n\x06limits\x18\x10 \x01(\x0b\x32\x15.gateway.v1.RateLimit\"*\n\x08KeyEntry\x12\x0e\n\x06lookup\x18\x01 \x01(\x0c\x12\x0e\n\x06key_id\x18\x02 \x01(\t\"\xae\x03\n\x0bGlobalLayer\x12)\n\x07version\x18\x01 \x01(\x0b\x32\x18.gateway.v1.LayerVersion\x12\x18\n\x10\x62uilt_at_unix_ms\x18\x02 \x01(\x03\x12+\n\x0b\x64\x65ployments\x18\x03 \x03(\x0b\x32\x16.gateway.v1.Deployment\x12\'\n\x07\x61liases\x18\x04 \x03(\x0b\x32\x16.gateway.v1.ModelAlias\x12\x44\n\x0ftenant_prefixes\x18\x05 \x03(\x0b\x32+.gateway.v1.GlobalLayer.TenantPrefixesEntry\x12\x32\n\x0f\x64\x65\x66\x61ult_plugins\x18\x06 \x03(\x0b\x32\x19.gateway.v1.PluginBinding\x12\x19\n\x11policy_bundle_ref\x18\x07 \x01(\t\x12\x38\n\x12\x64\x65\x66\x61ult_guardrails\x18\x08 \x03(\x0b\x32\x1c.gateway.v1.GuardrailBinding\x1a\x35\n\x13TenantPrefixesEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"\xa7\x03\n\x0bTenantLayer\x12\x0e\n\x06tenant\x18\x01 \x01(\t\x12)\n\x07version\x18\x02 \x01(\x0b\x32\x18.gateway.v1.LayerVersion\x12\x18\n\x10\x62uilt_at_unix_ms\x18\x03 \x01(\x03\x12\x0c\n\x04tier\x18\x04 \x01(\t\x12)\n\nprincipals\x18\x05 \x03(\x0b\x32\x15.gateway.v1.Principal\x12\"\n\x04keys\x18\x06 \x03(\x0b\x32\x14.gateway.v1.KeyEntry\x12/\n\x0f\x61lias_overrides\x18\x07 \x03(\x0b\x32\x16.gateway.v1.ModelAlias\x12(\n\x07\x62udgets\x18\x08 \x03(\x0b\x32\x17.gateway.v1.BudgetState\x12*\n\x07plugins\x18\t \x03(\x0b\x32\x19.gateway.v1.PluginBinding\x12-\n\x0emin_trust_tier\x18\n \x01(\x0e\x32\x15.gateway.v1.TrustTier\x12\x30\n\nguardrails\x18\x0b \x03(\x0b\x32\x1c.gateway.v1.GuardrailBinding\"c\n\x08Snapshot\x12-\n\x0cglobal_layer\x18\x01 \x01(\x0b\x32\x17.gateway.v1.GlobalLayer\x12(\n\x07tenants\x18\x02 \x03(\x0b\x32\x17.gateway.v1.TenantLayer*w\n\tTrustTier\x12\x1a\n\x16TRUST_TIER_UNSPECIFIED\x10\x00\x12\x17\n\x13TRUST_TIER_EXTERNAL\x10\x01\x12\x1c\n\x18TRUST_TIER_PRIVATE_CLOUD\x10\x02\x12\x17\n\x13TRUST_TIER_INTERNAL\x10\x03*\xce\x01\n\x0b\x42udgetScope\x12\x1c\n\x18\x42UDGET_SCOPE_UNSPECIFIED\x10\x00\x12\x14\n\x10\x42UDGET_SCOPE_KEY\x10\x01\x12\x14\n\x10\x42UDGET_SCOPE_APP\x10\x02\x12\x15\n\x11\x42UDGET_SCOPE_USER\x10\x03\x12\x15\n\x11\x42UDGET_SCOPE_TEAM\x10\x04\x12\x14\n\x10\x42UDGET_SCOPE_ORG\x10\x05\x12\x16\n\x12\x42UDGET_SCOPE_MODEL\x10\x06\x12\x19\n\x15\x42UDGET_SCOPE_TRAINING\x10\x07*g\n\x04Port\x12\x14\n\x10PORT_UNSPECIFIED\x10\x00\x12\x11\n\rPORT_PROVIDER\x10\x01\x12\x12\n\x0ePORT_GUARDRAIL\x10\x02\x12\x0e\n\nPORT_STORE\x10\x03\x12\x12\n\x0ePORT_TELEMETRY\x10\x04*[\n\x0b\x46\x61ilureMode\x12\x1c\n\x18\x46\x41ILURE_MODE_UNSPECIFIED\x10\x00\x12\x15\n\x11\x46\x41ILURE_MODE_OPEN\x10\x01\x12\x17\n\x13\x46\x41ILURE_MODE_CLOSED\x10\x02\x42IZGgithub.com/umerjavaidkh/model-gateway/dataplane/internal/wire/gatewayv1b\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x19gateway/v1/snapshot.proto\x12\ngateway.v1\".\n\x0cLayerVersion\x12\x0e\n\x06number\x18\x01 \x01(\x04\x12\x0e\n\x06\x64igest\x18\x02 \x01(\t\"4\n\nRoutingKey\x12\x12\n\nbase_model\x18\x01 \x01(\t\x12\x12\n\nadapter_id\x18\x02 \x01(\t\"\x94\x01\n\x04\x43ost\x12\x1e\n\x16input_per_1k_micro_usd\x18\x01 \x01(\x03\x12\x1f\n\x17output_per_1k_micro_usd\x18\x02 \x01(\x03\x12%\n\x1d\x63\x61\x63hed_input_per_1k_micro_usd\x18\x03 \x01(\x03\x12$\n\x1c\x63\x61\x63he_write_per_1k_micro_usd\x18\x04 \x01(\x03\"\xfa\x01\n\nDeployment\x12\n\n\x02id\x18\x01 \x01(\t\x12#\n\x03key\x18\x02 \x01(\x0b\x32\x16.gateway.v1.RoutingKey\x12\x10\n\x08provider\x18\x03 \x01(\t\x12\x10\n\x08\x65ndpoint\x18\x04 \x01(\t\x12\x0e\n\x06region\x18\x05 \x01(\t\x12)\n\ntrust_tier\x18\x06 \x01(\x0e\x32\x15.gateway.v1.TrustTier\x12\x16\n\x0e\x63redential_ref\x18\x07 \x01(\t\x12\x0e\n\x06weight\x18\x08 \x01(\r\x12\x1e\n\x04\x63ost\x18\t \x01(\x0b\x32\x10.gateway.v1.Cost\x12\x14\n\x0c\x63\x61pabilities\x18\n \x03(\t\"C\n\nModelAlias\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\'\n\x07targets\x18\x02 \x03(\x0b\x32\x16.gateway.v1.RoutingKey\"\x89\x02\n\nPolicyRule\x12\n\n\x02id\x18\x01 \x01(\t\x12(\n\x06\x65\x66\x66\x65\x63t\x18\x02 \x01(\x0e\x32\x18.gateway.v1.PolicyEffect\x12\x0e\n\x06models\x18\x03 \x03(\t\x12\x11\n\tendpoints\x18\x04 \x03(\t\x12\r\n\x05roles\x18\x05 \x03(\t\x12\x0f\n\x07regions\x18\x06 \x03(\t\x12\x14\n\x0csource_cidrs\x18\x07 \x03(\t\x12\x19\n\x11max_payload_bytes\x18\x08 \x01(\x04\x12\x12\n\ndata_class\x18\t \x01(\t\x12-\n\x0emin_trust_tier\x18\n \x01(\x0e\x32\x15.gateway.v1.TrustTier\x12\x0e\n\x06reason\x18\x0b \x01(\t\"\x84\x01\n\x0cPolicyBundle\x12\n\n\x02id\x18\x01 \x01(\t\x12\x0f\n\x07version\x18\x02 \x01(\x04\x12%\n\x05rules\x18\x03 \x03(\x0b\x32\x16.gateway.v1.PolicyRule\x12\x30\n\x0e\x64\x65\x66\x61ult_effect\x18\x04 \x01(\x0e\x32\x18.gateway.v1.PolicyEffect\"\xaf\x01\n\x10GuardrailBinding\x12\x11\n\tcomponent\x18\x01 \x01(\t\x12\x0f\n\x07version\x18\x02 \x01(\t\x12\x12\n\nconfig_ref\x18\x03 \x01(\t\x12\x12\n\ntimeout_ms\x18\x04 \x01(\r\x12-\n\x0c\x66\x61ilure_mode\x18\x05 \x01(\x0e\x32\x17.gateway.v1.FailureMode\x12\x10\n\x08\x62locking\x18\x06 \x01(\x08\x12\x0e\n\x06phases\x18\x07 \x03(\t\"g\n\rPluginBinding\x12\x1e\n\x04port\x18\x01 \x01(\x0e\x32\x10.gateway.v1.Port\x12\x11\n\tcomponent\x18\x02 \x01(\t\x12\x0f\n\x07version\x18\x03 \x01(\t\x12\x12\n\nconfig_ref\x18\x04 \x01(\t\"\xa0\x01\n\x0b\x42udgetState\x12\n\n\x02id\x18\x01 \x01(\t\x12&\n\x05scope\x18\x02 \x01(\x0e\x32\x17.gateway.v1.BudgetScope\x12\x17\n\x0flimit_micro_usd\x18\x03 \x01(\x03\x12\x17\n\x0fspent_micro_usd\x18\x04 \x01(\x03\x12\x0c\n\x04hard\x18\x05 \x01(\x08\x12\x1d\n\x15headroom_basis_points\x18\x06 \x01(\r\"?\n\tBudgetRef\x12\n\n\x02id\x18\x01 \x01(\t\x12&\n\x05scope\x18\x02 \x01(\x0e\x32\x17.gateway.v1.BudgetScope\"[\n\tRateLimit\x12\x1b\n\x13requests_per_minute\x18\x01 \x01(\r\x12\x19\n\x11tokens_per_minute\x18\x02 \x01(\r\x12\x16\n\x0emax_concurrent\x18\x03 \x01(\r\"\xfb\x02\n\tPrincipal\x12\x0e\n\x06key_id\x18\x01 \x01(\t\x12\x0e\n\x06tenant\x18\x02 \x01(\t\x12\x0b\n\x03org\x18\x03 \x01(\t\x12\x0c\n\x04team\x18\x04 \x01(\t\x12\x0c\n\x04user\x18\x05 \x01(\t\x12\x0b\n\x03\x61pp\x18\x06 \x01(\t\x12\r\n\x05roles\x18\x07 \x03(\t\x12\x18\n\x10models_allow_all\x18\x08 \x01(\x08\x12\x0e\n\x06models\x18\t \x03(\t\x12&\n\x07\x62udgets\x18\n \x03(\x0b\x32\x15.gateway.v1.BudgetRef\x12\x1a\n\x12\x64\x65\x66\x61ult_data_class\x18\x0b \x01(\t\x12-\n\x0emin_trust_tier\x18\x0c \x01(\x0e\x32\x15.gateway.v1.TrustTier\x12\x16\n\x0emax_concurrent\x18\r \x01(\r\x12\x12\n\ndeprecated\x18\x0e \x01(\x08\x12\x19\n\x11not_after_unix_ms\x18\x0f \x01(\x03\x12%\n\x06limits\x18\x10 \x01(\x0b\x32\x15.gateway.v1.RateLimit\"*\n\x08KeyEntry\x12\x0e\n\x06lookup\x18\x01 \x01(\x0c\x12\x0e\n\x06key_id\x18\x02 \x01(\t\"\xe0\x03\n\x0bGlobalLayer\x12)\n\x07version\x18\x01 \x01(\x0b\x32\x18.gateway.v1.LayerVersion\x12\x18\n\x10\x62uilt_at_unix_ms\x18\x02 \x01(\x03\x12+\n\x0b\x64\x65ployments\x18\x03 \x03(\x0b\x32\x16.gateway.v1.Deployment\x12\'\n\x07\x61liases\x18\x04 \x03(\x0b\x32\x16.gateway.v1.ModelAlias\x12\x44\n\x0ftenant_prefixes\x18\x05 \x03(\x0b\x32+.gateway.v1.GlobalLayer.TenantPrefixesEntry\x12\x32\n\x0f\x64\x65\x66\x61ult_plugins\x18\x06 \x03(\x0b\x32\x19.gateway.v1.PluginBinding\x12\x19\n\x11policy_bundle_ref\x18\x07 \x01(\t\x12\x38\n\x12\x64\x65\x66\x61ult_guardrails\x18\x08 \x03(\x0b\x32\x1c.gateway.v1.GuardrailBinding\x12\x30\n\x0e\x64\x65\x66\x61ult_policy\x18\t \x01(\x0b\x32\x18.gateway.v1.PolicyBundle\x1a\x35\n\x13TenantPrefixesEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"\xd1\x03\n\x0bTenantLayer\x12\x0e\n\x06tenant\x18\x01 \x01(\t\x12)\n\x07version\x18\x02 \x01(\x0b\x32\x18.gateway.v1.LayerVersion\x12\x18\n\x10\x62uilt_at_unix_ms\x18\x03 \x01(\x03\x12\x0c\n\x04tier\x18\x04 \x01(\t\x12)\n\nprincipals\x18\x05 \x03(\x0b\x32\x15.gateway.v1.Principal\x12\"\n\x04keys\x18\x06 \x03(\x0b\x32\x14.gateway.v1.KeyEntry\x12/\n\x0f\x61lias_overrides\x18\x07 \x03(\x0b\x32\x16.gateway.v1.ModelAlias\x12(\n\x07\x62udgets\x18\x08 \x03(\x0b\x32\x17.gateway.v1.BudgetState\x12*\n\x07plugins\x18\t \x03(\x0b\x32\x19.gateway.v1.PluginBinding\x12-\n\x0emin_trust_tier\x18\n \x01(\x0e\x32\x15.gateway.v1.TrustTier\x12\x30\n\nguardrails\x18\x0b \x03(\x0b\x32\x1c.gateway.v1.GuardrailBinding\x12(\n\x06policy\x18\x0c \x01(\x0b\x32\x18.gateway.v1.PolicyBundle\"c\n\x08Snapshot\x12-\n\x0cglobal_layer\x18\x01 \x01(\x0b\x32\x17.gateway.v1.GlobalLayer\x12(\n\x07tenants\x18\x02 \x03(\x0b\x32\x17.gateway.v1.TenantLayer*w\n\tTrustTier\x12\x1a\n\x16TRUST_TIER_UNSPECIFIED\x10\x00\x12\x17\n\x13TRUST_TIER_EXTERNAL\x10\x01\x12\x1c\n\x18TRUST_TIER_PRIVATE_CLOUD\x10\x02\x12\x17\n\x13TRUST_TIER_INTERNAL\x10\x03*\xce\x01\n\x0b\x42udgetScope\x12\x1c\n\x18\x42UDGET_SCOPE_UNSPECIFIED\x10\x00\x12\x14\n\x10\x42UDGET_SCOPE_KEY\x10\x01\x12\x14\n\x10\x42UDGET_SCOPE_APP\x10\x02\x12\x15\n\x11\x42UDGET_SCOPE_USER\x10\x03\x12\x15\n\x11\x42UDGET_SCOPE_TEAM\x10\x04\x12\x14\n\x10\x42UDGET_SCOPE_ORG\x10\x05\x12\x16\n\x12\x42UDGET_SCOPE_MODEL\x10\x06\x12\x19\n\x15\x42UDGET_SCOPE_TRAINING\x10\x07*g\n\x04Port\x12\x14\n\x10PORT_UNSPECIFIED\x10\x00\x12\x11\n\rPORT_PROVIDER\x10\x01\x12\x12\n\x0ePORT_GUARDRAIL\x10\x02\x12\x0e\n\nPORT_STORE\x10\x03\x12\x12\n\x0ePORT_TELEMETRY\x10\x04*[\n\x0b\x46\x61ilureMode\x12\x1c\n\x18\x46\x41ILURE_MODE_UNSPECIFIED\x10\x00\x12\x15\n\x11\x46\x41ILURE_MODE_OPEN\x10\x01\x12\x17\n\x13\x46\x41ILURE_MODE_CLOSED\x10\x02*^\n\x0cPolicyEffect\x12\x1d\n\x19POLICY_EFFECT_UNSPECIFIED\x10\x00\x12\x17\n\x13POLICY_EFFECT_ALLOW\x10\x01\x12\x16\n\x12POLICY_EFFECT_DENY\x10\x02\x42IZGgithub.com/umerjavaidkh/model-gateway/dataplane/internal/wire/gatewayv1b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -23,14 +23,16 @@ if _descriptor._USE_C_DESCRIPTORS == False:
   _globals['DESCRIPTOR']._serialized_options = b'ZGgithub.com/umerjavaidkh/model-gateway/dataplane/internal/wire/gatewayv1'
   _globals['_GLOBALLAYER_TENANTPREFIXESENTRY']._options = None
   _globals['_GLOBALLAYER_TENANTPREFIXESENTRY']._serialized_options = b'8\001'
-  _globals['_TRUSTTIER']._serialized_start=2606
-  _globals['_TRUSTTIER']._serialized_end=2725
-  _globals['_BUDGETSCOPE']._serialized_start=2728
-  _globals['_BUDGETSCOPE']._serialized_end=2934
-  _globals['_PORT']._serialized_start=2936
-  _globals['_PORT']._serialized_end=3039
-  _globals['_FAILUREMODE']._serialized_start=3041
-  _globals['_FAILUREMODE']._serialized_end=3132
+  _globals['_TRUSTTIER']._serialized_start=3101
+  _globals['_TRUSTTIER']._serialized_end=3220
+  _globals['_BUDGETSCOPE']._serialized_start=3223
+  _globals['_BUDGETSCOPE']._serialized_end=3429
+  _globals['_PORT']._serialized_start=3431
+  _globals['_PORT']._serialized_end=3534
+  _globals['_FAILUREMODE']._serialized_start=3536
+  _globals['_FAILUREMODE']._serialized_end=3627
+  _globals['_POLICYEFFECT']._serialized_start=3629
+  _globals['_POLICYEFFECT']._serialized_end=3723
   _globals['_LAYERVERSION']._serialized_start=41
   _globals['_LAYERVERSION']._serialized_end=87
   _globals['_ROUTINGKEY']._serialized_start=89
@@ -41,26 +43,30 @@ if _descriptor._USE_C_DESCRIPTORS == False:
   _globals['_DEPLOYMENT']._serialized_end=545
   _globals['_MODELALIAS']._serialized_start=547
   _globals['_MODELALIAS']._serialized_end=614
-  _globals['_GUARDRAILBINDING']._serialized_start=617
-  _globals['_GUARDRAILBINDING']._serialized_end=792
-  _globals['_PLUGINBINDING']._serialized_start=794
-  _globals['_PLUGINBINDING']._serialized_end=897
-  _globals['_BUDGETSTATE']._serialized_start=900
-  _globals['_BUDGETSTATE']._serialized_end=1060
-  _globals['_BUDGETREF']._serialized_start=1062
-  _globals['_BUDGETREF']._serialized_end=1125
-  _globals['_RATELIMIT']._serialized_start=1127
-  _globals['_RATELIMIT']._serialized_end=1218
-  _globals['_PRINCIPAL']._serialized_start=1221
-  _globals['_PRINCIPAL']._serialized_end=1600
-  _globals['_KEYENTRY']._serialized_start=1602
-  _globals['_KEYENTRY']._serialized_end=1644
-  _globals['_GLOBALLAYER']._serialized_start=1647
-  _globals['_GLOBALLAYER']._serialized_end=2077
-  _globals['_GLOBALLAYER_TENANTPREFIXESENTRY']._serialized_start=2024
-  _globals['_GLOBALLAYER_TENANTPREFIXESENTRY']._serialized_end=2077
-  _globals['_TENANTLAYER']._serialized_start=2080
-  _globals['_TENANTLAYER']._serialized_end=2503
-  _globals['_SNAPSHOT']._serialized_start=2505
-  _globals['_SNAPSHOT']._serialized_end=2604
+  _globals['_POLICYRULE']._serialized_start=617
+  _globals['_POLICYRULE']._serialized_end=882
+  _globals['_POLICYBUNDLE']._serialized_start=885
+  _globals['_POLICYBUNDLE']._serialized_end=1017
+  _globals['_GUARDRAILBINDING']._serialized_start=1020
+  _globals['_GUARDRAILBINDING']._serialized_end=1195
+  _globals['_PLUGINBINDING']._serialized_start=1197
+  _globals['_PLUGINBINDING']._serialized_end=1300
+  _globals['_BUDGETSTATE']._serialized_start=1303
+  _globals['_BUDGETSTATE']._serialized_end=1463
+  _globals['_BUDGETREF']._serialized_start=1465
+  _globals['_BUDGETREF']._serialized_end=1528
+  _globals['_RATELIMIT']._serialized_start=1530
+  _globals['_RATELIMIT']._serialized_end=1621
+  _globals['_PRINCIPAL']._serialized_start=1624
+  _globals['_PRINCIPAL']._serialized_end=2003
+  _globals['_KEYENTRY']._serialized_start=2005
+  _globals['_KEYENTRY']._serialized_end=2047
+  _globals['_GLOBALLAYER']._serialized_start=2050
+  _globals['_GLOBALLAYER']._serialized_end=2530
+  _globals['_GLOBALLAYER_TENANTPREFIXESENTRY']._serialized_start=2477
+  _globals['_GLOBALLAYER_TENANTPREFIXESENTRY']._serialized_end=2530
+  _globals['_TENANTLAYER']._serialized_start=2533
+  _globals['_TENANTLAYER']._serialized_end=2998
+  _globals['_SNAPSHOT']._serialized_start=3000
+  _globals['_SNAPSHOT']._serialized_end=3099
 # @@protoc_insertion_point(module_scope)
