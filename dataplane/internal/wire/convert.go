@@ -190,8 +190,10 @@ func decodeDeployment(d *pb.Deployment) core.Deployment {
 		TrustTier:     decodeTrustTier(d.GetTrustTier()),
 		CredentialRef: d.GetCredentialRef(),
 		Cost: core.Cost{
-			InputPer1K:  core.MicroUSD(d.GetCost().GetInputPer_1KMicroUsd()),
-			OutputPer1K: core.MicroUSD(d.GetCost().GetOutputPer_1KMicroUsd()),
+			InputPer1K:       core.MicroUSD(d.GetCost().GetInputPer_1KMicroUsd()),
+			OutputPer1K:      core.MicroUSD(d.GetCost().GetOutputPer_1KMicroUsd()),
+			CachedInputPer1K: core.MicroUSD(d.GetCost().GetCachedInputPer_1KMicroUsd()),
+			CacheWritePer1K:  core.MicroUSD(d.GetCost().GetCacheWritePer_1KMicroUsd()),
 		},
 	}
 	out.Weight = d.GetWeight()
@@ -212,8 +214,10 @@ func encodeDeployment(d core.Deployment) *pb.Deployment {
 		CredentialRef: d.CredentialRef,
 		Weight:        d.Weight,
 		Cost: &pb.Cost{
-			InputPer_1KMicroUsd:  int64(d.Cost.InputPer1K),
-			OutputPer_1KMicroUsd: int64(d.Cost.OutputPer1K),
+			InputPer_1KMicroUsd:       int64(d.Cost.InputPer1K),
+			OutputPer_1KMicroUsd:      int64(d.Cost.OutputPer1K),
+			CachedInputPer_1KMicroUsd: int64(d.Cost.CachedInputPer1K),
+			CacheWritePer_1KMicroUsd:  int64(d.Cost.CacheWritePer1K),
 		},
 	}
 	for _, c := range d.Capabilities {

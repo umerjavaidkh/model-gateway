@@ -209,7 +209,7 @@ func (p *Pipeline) Handle(ctx context.Context, snap *core.Snapshot, req *Request
 	// Recorded after the call, which is the earliest the count exists. A token
 	// limit therefore takes effect on the *next* request; that lag is inherent
 	// to limiting something that is only measurable afterwards.
-	p.limiter.RecordTokens(ctx, &principal, resp.Usage.Input+resp.Usage.Output)
+	p.limiter.RecordTokens(ctx, &principal, resp.Usage.Total())
 	emit(nil)
 	return result, nil
 }
@@ -244,20 +244,27 @@ func (p *Pipeline) emitUsage(ctx context.Context, snap *core.Snapshot, req *Requ
 	if err == nil {
 		outcome = ""
 	}
+	cost := d.Cost.For(result.Usage)
 
 	_ = p.telemetry.Emit(ctx, core.UsageEvent{
-		RequestID:       req.Meta.RequestID,
-		Timestamp:       p.now(),
-		Tenant:          result.Principal.Tenant,
-		KeyID:           result.Principal.KeyID,
-		Tier:            snap.Tier(result.Principal.Tenant),
-		Deployment:      result.Deployment,
-		Route:           result.Route,
-		Provider:        d.Provider,
-		Stream:          stream,
-		InputTokens:     result.Usage.Input,
-		OutputTokens:    result.Usage.Output,
-		CostMicroUSD:    d.Cost.For(result.Usage),
+		RequestID:         req.Meta.RequestID,
+		Timestamp:         p.now(),
+		Tenant:            result.Principal.Tenant,
+		KeyID:             result.Principal.KeyID,
+		Tier:              snap.Tier(result.Principal.Tenant),
+		Deployment:        result.Deployment,
+		Route:             result.Route,
+		Provider:          d.Provider,
+		Stream:            stream,
+		InputTokens:       result.Usage.Input,
+		CachedInputTokens: result.Usage.CachedInput,
+		CacheWriteTokens:  result.Usage.CacheWrite,
+		OutputTokens:      result.Usage.Output,
+		CostMicroUSD:      cost,
+		// Equal to cost until a rate card exists. Separate now because
+		// backfilling a price onto usage records that were only ever written
+		// with a cost is not possible.
+		PriceMicroUSD:   cost,
 		LatencyMs:       result.Latency.Milliseconds(),
 		TimeToFirstByte: result.TimeToFirstByte,
 		Outcome:         outcome,
@@ -347,7 +354,7 @@ func (p *Pipeline) HandleStream(ctx context.Context, snap *core.Snapshot, req *R
 	// stream ended and what it consumed. Every early-exit path above has
 	// already emitted, so exactly one event is produced either way.
 	result.finish = func(usage core.TokenUsage, ttfb time.Duration, streamErr error) {
-		p.limiter.RecordTokens(ctx, &principal, usage.Input+usage.Output)
+		p.limiter.RecordTokens(ctx, &principal, usage.Total())
 		r := &Result{
 			Principal:       result.Principal,
 			Deployment:      result.Deployment,

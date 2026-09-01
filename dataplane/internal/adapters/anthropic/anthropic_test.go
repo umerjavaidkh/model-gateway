@@ -324,3 +324,68 @@ func TestNoCredentialSendsNoApiKey(t *testing.T) {
 		t.Fatalf("x-api-key = %q, want none", u.gotKey)
 	}
 }
+
+func TestCacheClassesAreReportedSeparately(t *testing.T) {
+	// This schema reports cache reads and writes *alongside* input_tokens
+	// rather than inside it — the opposite of the OpenAI convention. Both
+	// normalize to the same disjoint classes.
+	u := newUpstream(t, func(w http.ResponseWriter, _ []byte) {
+		_, _ = io.WriteString(w, `{"id":"msg_1","usage":{"input_tokens":100,`+
+			`"output_tokens":50,"cache_read_input_tokens":900,`+
+			`"cache_creation_input_tokens":40}}`)
+	})
+
+	resp, err := anthropic.New().Invoke(t.Context(), callFor(u, `{"model":"reasoning"}`))
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+
+	got := resp.Usage
+	if got.Input != 100 || got.CachedInput != 900 || got.CacheWrite != 40 || got.Output != 50 {
+		t.Fatalf("usage = %+v", got)
+	}
+	if got.TotalInput() != 1040 {
+		t.Fatalf("TotalInput = %d, want 1040", got.TotalInput())
+	}
+}
+
+func TestStreamedCacheClassesSurviveToTheFinalChunk(t *testing.T) {
+	// Input classes arrive with message_start and are never repeated. A delta
+	// that omits them is not saying they became zero.
+	u := newUpstream(t, func(w http.ResponseWriter, _ []byte) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "event: message_start\ndata: {\"type\":\"message_start\","+
+			"\"message\":{\"usage\":{\"input_tokens\":10,\"cache_read_input_tokens\":500,"+
+			"\"cache_creation_input_tokens\":20,\"output_tokens\":1}}}\n\n")
+		_, _ = io.WriteString(w, "event: message_delta\ndata: {\"type\":\"message_delta\","+
+			"\"usage\":{\"output_tokens\":80}}\n\n")
+		_, _ = io.WriteString(w, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+	})
+
+	stream, err := anthropic.New().Stream(t.Context(), callFor(u, `{"model":"reasoning"}`))
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	defer func() { _ = stream.Close() }()
+
+	var final core.Chunk
+	for {
+		chunk, err := stream.Next(t.Context())
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("Next: %v", err)
+		}
+		if chunk.Final {
+			final = chunk
+		}
+	}
+
+	if final.Usage.CachedInput != 500 || final.Usage.CacheWrite != 20 {
+		t.Fatalf("cache classes lost across the stream: %+v", final.Usage)
+	}
+	if final.Usage.Output != 80 {
+		t.Fatalf("Output = %d, want the running total from message_delta", final.Usage.Output)
+	}
+}

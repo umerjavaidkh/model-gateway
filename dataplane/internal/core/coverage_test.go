@@ -262,3 +262,52 @@ func TestWithTenantLayerRejectsNil(t *testing.T) {
 		t.Fatal("expected a nil tenant layer to be refused")
 	}
 }
+
+func TestCostBillsEachTokenClassAtItsOwnRate(t *testing.T) {
+	// The point of the classes: a cache-heavy request must not be billed as
+	// though every input token were standard.
+	price := core.Cost{
+		InputPer1K:       3000,
+		CachedInputPer1K: 300,
+		CacheWritePer1K:  3750,
+		OutputPer1K:      15000,
+	}
+	usage := core.TokenUsage{Input: 1000, CachedInput: 10_000, CacheWrite: 2000, Output: 500}
+
+	// 1000*3000 + 10000*300 + 2000*3750 + 500*15000, all per 1k.
+	want := core.MicroUSD((3_000_000 + 3_000_000 + 7_500_000 + 7_500_000) / 1000)
+	if got := price.For(usage); got != want {
+		t.Fatalf("For = %d, want %d", got, want)
+	}
+
+	// Billed as though it were all standard input, the same request costs far
+	// more — which is the error this replaces.
+	flat := core.Cost{InputPer1K: 3000, OutputPer1K: 15000}
+	if flat.For(usage) <= price.For(usage) {
+		t.Fatal("a cache-aware price must be lower than a flat one for a cache-heavy request")
+	}
+}
+
+func TestAnUnsetCachedRateFallsBackToInputRatherThanFree(t *testing.T) {
+	// Billing cached tokens at zero because nobody configured a rate would
+	// silently give away the majority of a cache-heavy workload.
+	price := core.Cost{InputPer1K: 3000, OutputPer1K: 15000}
+	usage := core.TokenUsage{CachedInput: 10_000}
+
+	if got := price.For(usage); got != 30_000 {
+		t.Fatalf("For = %d, want the input rate applied, not zero", got)
+	}
+}
+
+func TestTokenUsageTotals(t *testing.T) {
+	// The classes are disjoint by construction, so a total is a plain sum and
+	// no caller has to know which provider convention produced them.
+	usage := core.TokenUsage{Input: 10, CachedInput: 20, CacheWrite: 5, Output: 40}
+
+	if got := usage.Total(); got != 75 {
+		t.Fatalf("Total = %d, want 75", got)
+	}
+	if got := usage.TotalInput(); got != 35 {
+		t.Fatalf("TotalInput = %d, want 35", got)
+	}
+}

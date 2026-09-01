@@ -62,12 +62,24 @@ message RoutingKey {
   string adapter_id = 2;
 }
 
+// Cost is what a deployment charges, per thousand tokens of each class.
+//
+// Millionths of a US dollar, integer, never floating point: per-token prices
+// are small enough that float rounding reaches the invoice.
+//
+// The classes exist because providers do not bill all input tokens the same.
+// Cached input is an order of magnitude cheaper, and writing to a cache is
+// dearer than a plain read. Recording only a single input rate means a request
+// that was 90% cache reads is billed as though it were not — and the provider
+// told us the truth exactly once, in a response we did not keep.
 message Cost {
-  // Millionths of a US dollar per thousand tokens. Integer, never floating
-  // point: per-token prices are small enough that float rounding reaches the
-  // invoice.
   int64 input_per_1k_micro_usd = 1;
   int64 output_per_1k_micro_usd = 2;
+  // Zero means unconfigured, and the caller falls back to the standard input
+  // rate. Falling back over-bills slightly rather than under-billing, which is
+  // the safe direction for a number a customer disputes.
+  int64 cached_input_per_1k_micro_usd = 3;
+  int64 cache_write_per_1k_micro_usd = 4;
 }
 
 message Deployment {

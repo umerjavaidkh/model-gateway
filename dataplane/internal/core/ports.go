@@ -47,11 +47,36 @@ type ProviderCall struct {
 	Credential Credential
 }
 
-// TokenUsage is what the provider reported it consumed. Providers that do not
-// report usage leave this zero and the accounting layer estimates instead.
+// TokenUsage is what the provider reported it consumed, broken down by billing
+// class. Providers that do not report usage leave this zero, and the accounting
+// layer estimates instead.
+//
+// The classes are normalized by each adapter, because providers disagree about
+// whether cached tokens are counted inside the input total or alongside it.
+// Here they are always disjoint: Input excludes CachedInput and CacheWrite, so
+// Total is a plain sum and no caller has to know which convention a provider
+// used.
 type TokenUsage struct {
-	Input  int64
-	Output int64
+	// Input is standard, uncached input.
+	Input int64
+	// CachedInput was served from the provider's prompt cache, and is billed at
+	// a fraction of the standard rate.
+	CachedInput int64
+	// CacheWrite was written into the provider's cache, and costs more than a
+	// plain read.
+	CacheWrite int64
+	Output     int64
+}
+
+// Total is every token the request consumed, of any class.
+func (u TokenUsage) Total() int64 {
+	return u.Input + u.CachedInput + u.CacheWrite + u.Output
+}
+
+// TotalInput is every input token, of any class. Useful where the distinction
+// does not matter, such as a rate limit expressed in plain tokens.
+func (u TokenUsage) TotalInput() int64 {
+	return u.Input + u.CachedInput + u.CacheWrite
 }
 
 // ProviderResponse is a completed non-streaming call.

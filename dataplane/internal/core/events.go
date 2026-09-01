@@ -48,7 +48,20 @@ type UsageEvent struct {
 
 	InputTokens  int64
 	OutputTokens int64
-	CostMicroUSD MicroUSD
+	// CachedInputTokens and CacheWriteTokens are recorded separately because
+	// they are billed at different rates, and because a request's cache hit
+	// rate is unrecoverable after the fact — the provider reports it once.
+	CachedInputTokens int64
+	CacheWriteTokens  int64
+
+	// CostMicroUSD is what the provider charges us. PriceMicroUSD is what the
+	// tenant is charged. They are equal today because no rate card exists yet,
+	// and they are separate fields because the moment one tenant has a
+	// negotiated rate, a markup or a committed-use tier, conflating them is
+	// wrong in the direction of a customer dispute — and budgets are enforced
+	// against price, not cost.
+	CostMicroUSD  MicroUSD
+	PriceMicroUSD MicroUSD
 
 	LatencyMs       int64
 	TimeToFirstByte time.Duration

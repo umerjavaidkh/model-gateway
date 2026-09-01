@@ -329,3 +329,41 @@ func TestEndpointTrailingSlashIsTolerated(t *testing.T) {
 		t.Fatalf("path = %q, want no doubled slash", u.gotPath)
 	}
 }
+
+func TestCachedTokensAreSubtractedFromTheInputTotal(t *testing.T) {
+	// prompt_tokens includes the cached ones in this schema. Recording both
+	// as-is would double-count input and over-bill every cached request.
+	u := newUpstream(t, func(w http.ResponseWriter, _ []byte) {
+		_, _ = io.WriteString(w, `{"id":"c1","usage":{"prompt_tokens":1000,`+
+			`"completion_tokens":50,"prompt_tokens_details":{"cached_tokens":900}}}`)
+	})
+
+	resp, err := openaicompat.New().Invoke(t.Context(), callFor(u, `{"model":"fast"}`))
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+
+	if resp.Usage.Input != 100 || resp.Usage.CachedInput != 900 {
+		t.Fatalf("usage = %+v, want 100 standard and 900 cached", resp.Usage)
+	}
+	if resp.Usage.TotalInput() != 1000 {
+		t.Fatalf("TotalInput = %d, want the reported prompt_tokens", resp.Usage.TotalInput())
+	}
+}
+
+func TestAnImpossibleCachedCountIsClamped(t *testing.T) {
+	// A provider reporting more cached than total is malfunctioning, and a
+	// negative input count would surface as a credit on an invoice.
+	u := newUpstream(t, func(w http.ResponseWriter, _ []byte) {
+		_, _ = io.WriteString(w, `{"usage":{"prompt_tokens":10,"completion_tokens":1,`+
+			`"prompt_tokens_details":{"cached_tokens":999}}}`)
+	})
+
+	resp, err := openaicompat.New().Invoke(t.Context(), callFor(u, `{"model":"fast"}`))
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	if resp.Usage.Input < 0 {
+		t.Fatalf("Input = %d, want it clamped at zero", resp.Usage.Input)
+	}
+}

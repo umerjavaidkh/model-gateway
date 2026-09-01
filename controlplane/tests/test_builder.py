@@ -208,3 +208,43 @@ def test_budget_headroom_is_held_back() -> None:
 
     spent = dataclasses.replace(budget, spent_micro_usd=950_000)
     assert spent.available_micro_usd == 0
+
+
+def test_token_class_rates_reach_the_snapshot(fleet: Fleet, tenant: Tenant) -> None:
+    # A cache rate the worker never sees is a cache rate that does not apply,
+    # and the request that would have used it is billed at the standard price.
+    from model_gateway_control.domain.catalog import Cost
+
+    priced = dataclasses.replace(
+        fleet,
+        deployments=(
+            dataclasses.replace(
+                fleet.deployments[0],
+                cost=Cost(
+                    input_per_1k_micro_usd=3000,
+                    output_per_1k_micro_usd=15000,
+                    cached_input_per_1k_micro_usd=300,
+                    cache_write_per_1k_micro_usd=3750,
+                ),
+            ),
+            *fleet.deployments[1:],
+        ),
+    )
+
+    snapshot = build_snapshot(priced, [tenant], BUILT_AT)
+    cost = snapshot.global_layer.deployments[0].cost
+
+    assert cost.input_per_1k_micro_usd == 3000
+    assert cost.cached_input_per_1k_micro_usd == 300
+    assert cost.cache_write_per_1k_micro_usd == 3750
+
+
+def test_unset_cache_rates_stay_zero_rather_than_defaulting_here() -> None:
+    # The fallback to the standard input rate belongs in the data plane, at the
+    # point of billing. Baking it in here would freeze today's rate into every
+    # snapshot and make changing it a rebuild of history.
+    from model_gateway_control.domain.catalog import Cost
+
+    cost = Cost(input_per_1k_micro_usd=3000, output_per_1k_micro_usd=15000)
+    assert cost.cached_input_per_1k_micro_usd == 0
+    assert cost.cache_write_per_1k_micro_usd == 0

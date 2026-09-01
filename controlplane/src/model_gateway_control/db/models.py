@@ -318,6 +318,10 @@ class Deployment(Base, TimestampMixin):
     weight: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     input_cost_micro_usd: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     output_cost_micro_usd: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Zero means unconfigured, and the data plane falls back to the standard
+    # input rate rather than billing these at nothing.
+    cached_input_cost_micro_usd: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cache_write_cost_micro_usd: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     capabilities: Mapped[list[DeploymentCapability]] = relationship(
         lazy="selectin", cascade="all, delete-orphan"

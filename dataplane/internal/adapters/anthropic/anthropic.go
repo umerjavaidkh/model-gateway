@@ -210,11 +210,29 @@ func upstreamError(resp *http.Response) error {
 }
 
 // message is the sliver of a non-streaming response holding usage.
+//
+// input_tokens here excludes cache reads and writes, which are reported
+// alongside it — the opposite of the OpenAI convention, where the cached count
+// is a subset of the total. TokenUsage normalizes both so nothing downstream
+// has to know which it came from.
 type message struct {
-	Usage struct {
-		InputTokens  int64 `json:"input_tokens"`
-		OutputTokens int64 `json:"output_tokens"`
-	} `json:"usage"`
+	Usage anthropicUsage `json:"usage"`
+}
+
+type anthropicUsage struct {
+	InputTokens              int64 `json:"input_tokens"`
+	OutputTokens             int64 `json:"output_tokens"`
+	CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
+}
+
+func (u anthropicUsage) normalized() core.TokenUsage {
+	return core.TokenUsage{
+		Input:       u.InputTokens,
+		CachedInput: u.CacheReadInputTokens,
+		CacheWrite:  u.CacheCreationInputTokens,
+		Output:      u.OutputTokens,
+	}
 }
 
 // usageFromMessage extracts reported usage, returning zero when absent. Zero is
@@ -225,7 +243,7 @@ func usageFromMessage(body []byte) core.TokenUsage {
 	if err := json.Unmarshal(body, &m); err != nil {
 		return core.TokenUsage{}
 	}
-	return core.TokenUsage{Input: m.Usage.InputTokens, Output: m.Usage.OutputTokens}
+	return m.Usage.normalized()
 }
 
 // --- streaming --------------------------------------------------------------
@@ -243,15 +261,9 @@ const (
 type streamEvent struct {
 	Type    string `json:"type"`
 	Message *struct {
-		Usage struct {
-			InputTokens  int64 `json:"input_tokens"`
-			OutputTokens int64 `json:"output_tokens"`
-		} `json:"usage"`
+		Usage anthropicUsage `json:"usage"`
 	} `json:"message"`
-	Usage *struct {
-		InputTokens  int64 `json:"input_tokens"`
-		OutputTokens int64 `json:"output_tokens"`
-	} `json:"usage"`
+	Usage *anthropicUsage `json:"usage"`
 	Error *struct {
 		Type    string `json:"type"`
 		Message string `json:"message"`
@@ -314,18 +326,28 @@ func (s *stream) Next(ctx context.Context) (core.Chunk, error) {
 		switch event.Type {
 		case eventMessageStart:
 			if event.Message != nil {
-				s.usage.Input = event.Message.Usage.InputTokens
-				s.usage.Output = event.Message.Usage.OutputTokens
+				// message_start carries the input classes, which never change
+				// afterwards.
+				s.usage = event.Message.Usage.normalized()
 			}
 		case eventMessageDelta:
 			if event.Usage != nil {
-				// message_delta carries a running output total, so the last one
-				// wins rather than accumulating.
-				if event.Usage.OutputTokens > 0 {
-					s.usage.Output = event.Usage.OutputTokens
+				// message_delta carries a running total, so the last one wins
+				// rather than accumulating. Input counts are only overwritten
+				// when present, because a delta that omits them is not saying
+				// they became zero.
+				reported := event.Usage.normalized()
+				if reported.Output > 0 {
+					s.usage.Output = reported.Output
 				}
-				if event.Usage.InputTokens > 0 {
-					s.usage.Input = event.Usage.InputTokens
+				if reported.Input > 0 {
+					s.usage.Input = reported.Input
+				}
+				if reported.CachedInput > 0 {
+					s.usage.CachedInput = reported.CachedInput
+				}
+				if reported.CacheWrite > 0 {
+					s.usage.CacheWrite = reported.CacheWrite
 				}
 			}
 		case eventError:

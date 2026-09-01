@@ -66,12 +66,16 @@ class RoutingKey(_message.Message):
     def __init__(self, base_model: _Optional[str] = ..., adapter_id: _Optional[str] = ...) -> None: ...
 
 class Cost(_message.Message):
-    __slots__ = ("input_per_1k_micro_usd", "output_per_1k_micro_usd")
+    __slots__ = ("input_per_1k_micro_usd", "output_per_1k_micro_usd", "cached_input_per_1k_micro_usd", "cache_write_per_1k_micro_usd")
     INPUT_PER_1K_MICRO_USD_FIELD_NUMBER: _ClassVar[int]
     OUTPUT_PER_1K_MICRO_USD_FIELD_NUMBER: _ClassVar[int]
+    CACHED_INPUT_PER_1K_MICRO_USD_FIELD_NUMBER: _ClassVar[int]
+    CACHE_WRITE_PER_1K_MICRO_USD_FIELD_NUMBER: _ClassVar[int]
     input_per_1k_micro_usd: int
     output_per_1k_micro_usd: int
-    def __init__(self, input_per_1k_micro_usd: _Optional[int] = ..., output_per_1k_micro_usd: _Optional[int] = ...) -> None: ...
+    cached_input_per_1k_micro_usd: int
+    cache_write_per_1k_micro_usd: int
+    def __init__(self, input_per_1k_micro_usd: _Optional[int] = ..., output_per_1k_micro_usd: _Optional[int] = ..., cached_input_per_1k_micro_usd: _Optional[int] = ..., cache_write_per_1k_micro_usd: _Optional[int] = ...) -> None: ...
 
 class Deployment(_message.Message):
     __slots__ = ("id", "key", "provider", "endpoint", "region", "trust_tier", "credential_ref", "weight", "cost", "capabilities")

@@ -219,6 +219,8 @@ def _to_deployment(row: models.Deployment) -> Deployment:
         cost=Cost(
             input_per_1k_micro_usd=row.input_cost_micro_usd,
             output_per_1k_micro_usd=row.output_cost_micro_usd,
+            cached_input_per_1k_micro_usd=row.cached_input_cost_micro_usd,
+            cache_write_per_1k_micro_usd=row.cache_write_cost_micro_usd,
         ),
         capabilities=tuple(
             Capability(c.capability) for c in sorted(row.capabilities, key=lambda c: c.capability)
