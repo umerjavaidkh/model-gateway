@@ -22,6 +22,7 @@ import (
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/adapters/echo"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/adapters/memkv"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/adapters/openaicompat"
+	"github.com/umerjavaidkh/model-gateway/dataplane/internal/adapters/rediskv"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/config"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/core"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/gateway"
@@ -152,18 +153,16 @@ func run(logger *slog.Logger) error {
 		}
 	}()
 
-	// An in-process store until the Redis adapter lands, which means limits are
-	// enforced per worker: the fleet-wide ceiling is the configured limit times
-	// the worker count. Logged rather than left for an operator to infer from a
-	// graph.
-	limitStore := memkv.New()
+	limitStore, closeLimitStore, err := openLimitStore(ctx, cfg, logger)
+	if err != nil {
+		return err
+	}
+	defer closeLimitStore()
+
 	limiter, err := limits.New(limitStore, limits.WithLogger(logger))
 	if err != nil {
 		return err
 	}
-	logger.Info("rate limits are enforced per worker",
-		slog.String("store", "in-process"),
-		slog.String("note", "fleet-wide limits need a shared store"))
 
 	pipeline, err := gateway.New(providers, credentials, cfg.KeyPepper,
 		gateway.WithTelemetry(emitter),
@@ -264,4 +263,41 @@ func bootstrapSource(cfg config.Config) (snapshot.Source, error) {
 		return snapshot.NewFileSource(cfg.SnapshotFile), nil
 	}
 	return snapshot.NewHTTPSource(cfg.ControlPlaneURL, cfg.ControlPlaneToken)
+}
+
+// openLimitStore chooses where rate-limit counters live.
+//
+// With Redis, limits are fleet-wide. Without it they are enforced per worker
+// and the ceiling becomes the configured limit times the worker count — a
+// legitimate deployment for a single worker, and a surprise for anyone running
+// several. Which mode is active is logged at startup rather than left to be
+// inferred from a graph.
+func openLimitStore(
+	ctx context.Context, cfg config.Config, logger *slog.Logger,
+) (core.KVStore, func(), error) {
+	if cfg.RedisURL == "" {
+		logger.Warn("rate limits are enforced per worker",
+			slog.String("store", "in-process"),
+			slog.String("note", "set GATEWAY_REDIS_URL for fleet-wide limits"))
+		return memkv.New(), func() {}, nil
+	}
+
+	store, err := rediskv.Open(cfg.RedisURL)
+	if err != nil {
+		return nil, nil, err
+	}
+	// Checked at startup rather than discovered on the first request. A
+	// misconfigured URL would otherwise present as every limit failing open,
+	// which looks like traffic behaving normally.
+	if err := store.Ping(ctx); err != nil {
+		_ = store.Close()
+		return nil, nil, err
+	}
+
+	logger.Info("rate limits are enforced fleet-wide", slog.String("store", "redis"))
+	return store, func() {
+		if err := store.Close(); err != nil {
+			logger.Error("closing the rate limit store", slog.String("error", err.Error()))
+		}
+	}, nil
 }

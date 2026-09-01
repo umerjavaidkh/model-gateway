@@ -139,8 +139,8 @@ decided and why.
 | M5d — Snapshot subscriber: worker fetches from the control plane | **done** |
 | M6a — Rate limits: local lease bucket, enforced at admission | **done** |
 | M6-pricing — Token classes and cost/price separation | **done** |
-| M6b — Redis `KVStore`, making limits fleet-wide | next |
-| M6c — Budgets: accounting consumer folds spend into snapshots | |
+| M6b — Redis `KVStore`, making limits fleet-wide | **done** |
+| M6c — Budgets: accounting consumer folds spend into snapshots | next |
 | M7 — Router: selection/execution split, circuit breakers, health EWMA | |
 | M8 — `GuardrailPort` and policy engine | |
 | M9 — PII chain | |

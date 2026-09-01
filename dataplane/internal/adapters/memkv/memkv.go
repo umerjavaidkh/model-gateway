@@ -78,16 +78,23 @@ func (s *Store) Incr(_ context.Context, key string, delta int64, ttl time.Durati
 	defer s.mu.Unlock()
 
 	current := int64(0)
+	// The expiry is set when a counter is created and never extended. If every
+	// increment pushed it out, a continuously busy key would never expire and
+	// its rate-limit window would never roll — so the busiest principal, the
+	// one the limit exists for, would be the one it stopped applying to.
+	expiresAt := s.now().Add(ttl)
+
 	if e, ok := s.entries[key]; ok && !s.expired(e) {
 		parsed, err := parseInt(e.value)
 		if err != nil {
 			return 0, core.Wrap(core.CodeInternal, err, "counter holds a non-numeric value")
 		}
 		current = parsed
+		expiresAt = e.expiresAt
 	}
 
 	total := current + delta
-	s.entries[key] = entry{value: formatInt(total), expiresAt: s.now().Add(ttl)}
+	s.entries[key] = entry{value: formatInt(total), expiresAt: expiresAt}
 	return total, nil
 }
 
