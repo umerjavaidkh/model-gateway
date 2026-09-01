@@ -30,6 +30,7 @@ import (
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/gateway"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/httpapi"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/limits"
+	"github.com/umerjavaidkh/model-gateway/dataplane/internal/router"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/secrets"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/snapshot"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/telemetry"
@@ -189,9 +190,15 @@ func run(logger *slog.Logger) error {
 		}
 	}()
 
+	rt, err := router.New(providers, router.WithLogger(logger))
+	if err != nil {
+		return err
+	}
+
 	pipeline, err := gateway.New(providers, credentials, cfg.KeyPepper,
 		gateway.WithTelemetry(emitter),
-		gateway.WithLimiter(limiter))
+		gateway.WithLimiter(limiter),
+		gateway.WithRouter(rt))
 	if err != nil {
 		return err
 	}
@@ -200,6 +207,7 @@ func run(logger *slog.Logger) error {
 		Metrics:        promhttp.HandlerFor(registry, promhttp.HandlerOpts{}),
 		TelemetryStats: emitter.Stats,
 	}
+	options.RouterStats = rt.Stats
 	if subscriber != nil {
 		// Reported on /readyz because "is this worker still receiving
 		// configuration" is the first question asked when a change does not

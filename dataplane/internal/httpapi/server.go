@@ -26,6 +26,7 @@ import (
 
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/core"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/gateway"
+	"github.com/umerjavaidkh/model-gateway/dataplane/internal/router"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/snapshot"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/telemetry"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/tracing"
@@ -52,13 +53,14 @@ const (
 
 // Server holds the dependencies the handlers need.
 type Server struct {
-	holder   *snapshot.Holder
-	pipeline *gateway.Pipeline
-	logger   *slog.Logger
-	newID    func() string
-	metrics  http.Handler
-	stats    func() telemetry.Stats
-	subStats func() snapshot.SubscriberStats
+	holder      *snapshot.Holder
+	pipeline    *gateway.Pipeline
+	logger      *slog.Logger
+	newID       func() string
+	metrics     http.Handler
+	stats       func() telemetry.Stats
+	subStats    func() snapshot.SubscriberStats
+	routerStats func() []router.DeploymentHealth
 }
 
 // Options configures a Server. Fields left zero take a sensible default.
@@ -74,6 +76,9 @@ type Options struct {
 	// SubscriberStats reports snapshot-subscription health on /readyz, so
 	// "is this worker still receiving configuration" is answerable the same way.
 	SubscriberStats func() snapshot.SubscriberStats
+	// RouterStats reports per-deployment health and breaker state, which is
+	// what answers "why is traffic going there" during an incident.
+	RouterStats func() []router.DeploymentHealth
 }
 
 // NewServer builds the HTTP handler set.
@@ -82,13 +87,14 @@ func NewServer(holder *snapshot.Holder, pipeline *gateway.Pipeline, opts Options
 		return nil, core.New(core.CodeInternal, "the server needs a snapshot holder and a pipeline")
 	}
 	s := &Server{
-		holder:   holder,
-		pipeline: pipeline,
-		logger:   opts.Logger,
-		newID:    opts.NewID,
-		metrics:  opts.Metrics,
-		stats:    opts.TelemetryStats,
-		subStats: opts.SubscriberStats,
+		holder:      holder,
+		pipeline:    pipeline,
+		logger:      opts.Logger,
+		newID:       opts.NewID,
+		metrics:     opts.Metrics,
+		stats:       opts.TelemetryStats,
+		subStats:    opts.SubscriberStats,
+		routerStats: opts.RouterStats,
 	}
 	if s.logger == nil {
 		s.logger = slog.Default()
@@ -142,6 +148,18 @@ func (s *Server) handleReady(w http.ResponseWriter, _ *http.Request) {
 			"rejected":   sub.Rejected,
 			"last_error": sub.LastError,
 		}
+	}
+	if s.routerStats != nil {
+		deployments := make([]map[string]any, 0)
+		for _, d := range s.routerStats() {
+			deployments = append(deployments, map[string]any{
+				"deployment":   string(d.Deployment),
+				"score":        d.Score,
+				"observations": d.Observations,
+				"breaker_open": d.BreakerOpen,
+			})
+		}
+		body["router"] = deployments
 	}
 	if s.stats != nil {
 		t := s.stats()

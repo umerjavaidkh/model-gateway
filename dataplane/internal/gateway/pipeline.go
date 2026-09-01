@@ -9,7 +9,6 @@ package gateway
 
 import (
 	"context"
-	"slices"
 	"sync"
 	"time"
 
@@ -17,6 +16,7 @@ import (
 
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/core"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/limits"
+	"github.com/umerjavaidkh/model-gateway/dataplane/internal/router"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/tracing"
 )
 
@@ -74,6 +74,7 @@ type Pipeline struct {
 	credentials CredentialResolver
 	telemetry   core.TelemetryPort
 	limiter     RateLimiter
+	router      *router.Router
 	// pepper keys the HMAC that turns a presented key secret into the value a
 	// snapshot indexes principals by. It never enters a snapshot, so a stolen
 	// snapshot yields no usable key.
@@ -97,6 +98,17 @@ type RateLimiter interface {
 	Admit(ctx context.Context, p *core.Principal) limits.Decision
 	Release(p *core.Principal)
 	RecordTokens(ctx context.Context, p *core.Principal, tokens int64)
+}
+
+// WithRouter replaces the router. Without one the pipeline builds its own with
+// default breaker and retry settings, which is what a test wants and what a
+// worker gets unless it configures otherwise.
+func WithRouter(rt *router.Router) Option {
+	return func(p *Pipeline) {
+		if rt != nil {
+			p.router = rt
+		}
+	}
 }
 
 // WithLimiter sets the rate limiter. Without one, limits in the snapshot are
@@ -143,6 +155,14 @@ func New(providers ProviderRegistry, credentials CredentialResolver, pepper []by
 	for _, opt := range opts {
 		opt(p)
 	}
+
+	if p.router == nil {
+		rt, err := router.New(providers)
+		if err != nil {
+			return nil, err
+		}
+		p.router = rt
+	}
 	return p, nil
 }
 
@@ -185,23 +205,32 @@ func (p *Pipeline) Handle(ctx context.Context, snap *core.Snapshot, req *Request
 	// concurrency limit mean anything. Released on every exit path below.
 	defer p.limiter.Release(&principal)
 
-	deployment, err = stage(ctx, "route", func() (core.Deployment, error) {
+	candidates, err := stage(ctx, "route", func() ([]router.Candidate, error) {
 		return p.route(snap, &principal, req)
 	})
 	if err != nil {
 		emit(err)
 		return result, err
 	}
+	// Attributed to the first candidate until execution says otherwise, so a
+	// failure that never reached a provider is still attributed somewhere.
+	deployment = candidates[0].Deployment
 	result.Deployment = deployment.ID
 	result.Route = deployment.Key
 
-	resp, err := stage(ctx, "adapt", func() (*core.ProviderResponse, error) {
-		return p.adapt(ctx, deployment, req)
+	executed, err := stage(ctx, "adapt", func() (*router.Result, error) {
+		return p.adapt(ctx, candidates, req, false)
 	})
 	if err != nil {
 		emit(err)
 		return result, err
 	}
+	// Whichever candidate actually served it, which is not necessarily the
+	// first when one was skipped or failed over.
+	deployment = executed.Deployment
+	result.Deployment = deployment.ID
+	result.Route = deployment.Key
+	resp := executed.Response
 
 	result.StatusCode = resp.StatusCode
 	result.Body = resp.Body
@@ -330,39 +359,29 @@ func (p *Pipeline) HandleStream(ctx context.Context, snap *core.Snapshot, req *R
 	// mean anything for a response that takes a minute. Released by Finish.
 	result.releaseLimit = func() { p.limiter.Release(&principal) }
 
-	deployment, err := p.route(snap, &principal, req)
+	candidates, err := p.route(snap, &principal, req)
 	if err != nil {
 		emit(err)
 		return result, err
 	}
+
+	// Retries here cover starting the stream, not continuing one. Once a byte
+	// has been relayed the response is committed and failing over would send
+	// the caller two different answers concatenated.
+	executed, err := p.adapt(ctx, candidates, req, true)
+	if err != nil {
+		if executed != nil && len(executed.Attempts) > 0 {
+			result.Deployment = executed.Attempts[len(executed.Attempts)-1].Deployment
+		}
+		emit(err)
+		return result, err
+	}
+
+	deployment := executed.Deployment
 	result.deployment = deployment
 	result.Deployment = deployment.ID
 	result.Route = deployment.Key
-
-	provider, ok := p.providers.Provider(deployment.Provider)
-	if !ok {
-		err := core.Newf(core.CodeInternal, "provider %q vanished between routing and execution", deployment.Provider)
-		emit(err)
-		return result, err
-	}
-	credential, err := p.credentials.Resolve(ctx, deployment.CredentialRef)
-	if err != nil {
-		emit(err)
-		return result, err
-	}
-
-	chunks, err := provider.Stream(ctx, &core.ProviderCall{
-		Deployment: deployment,
-		Meta:       req.Meta,
-		Body:       req.Body,
-		Credential: credential,
-	})
-	if err != nil {
-		emit(err)
-		return result, err
-	}
-
-	result.Chunks = chunks
+	result.Chunks = executed.Stream
 	// Finish is deferred to the caller because only the caller knows how the
 	// stream ended and what it consumed. Every early-exit path above has
 	// already emitted, so exactly one event is produced either way.
@@ -478,93 +497,56 @@ func (unlimited) Release(*core.Principal) {}
 // RecordTokens discards the count.
 func (unlimited) RecordTokens(context.Context, *core.Principal, int64) {}
 
-// route resolves the requested model to a deployment that may serve it.
+// route selects an ordered list of deployments that may serve the request.
 //
-// The minimum trust tier is computed once, before any candidate is considered,
-// and every candidate is filtered against it. That ordering matters: the
-// reference design transforms payloads after routing, so if execution could
-// fall back from an internal deployment to an external one, an already-redacted
-// payload would be wrong — or worse, an unredacted one would leave the network.
-// Pinning the tier for the whole candidate set makes that impossible by
-// construction rather than by care.
-//
-// Selection is first-fit here. Cost and latency objectives, health scoring and
-// circuit breakers belong to the router and arrive with it; this stage's
-// contract — an ordered, tier-filtered candidate list — does not change.
-func (p *Pipeline) route(snap *core.Snapshot, principal *core.Principal, req *Request) (core.Deployment, error) {
+// The minimum trust tier is computed once here and applied to the whole list,
+// not per attempt. That ordering is the point: the reference design transforms
+// payloads after routing, so a fallback that changed tier would send a payload
+// prepared for one destination to another. Filtering the list makes that
+// impossible by construction rather than by care in the execution loop.
+func (p *Pipeline) route(
+	snap *core.Snapshot, principal *core.Principal, req *Request,
+) ([]router.Candidate, error) {
 	minTier := snap.MinTrustTier(principal.Tenant)
 	if principal.MinTrustTier > minTier {
 		minTier = principal.MinTrustTier
 	}
 
-	targets := snap.ResolveAlias(principal.Tenant, req.Meta.Model)
-
-	var sawAny, sawServing, sawTier bool
-	for _, target := range targets {
-		for _, d := range snap.Deployments(target) {
-			sawAny = true
-			if !d.Serving() {
-				continue
-			}
-			sawServing = true
-			if !d.TrustTier.AtLeast(minTier) {
-				continue
-			}
-			sawTier = true
-			provider, ok := p.providers.Provider(d.Provider)
-			if !ok {
-				continue
-			}
-			// An adapter that does not speak the caller's API surface would
-			// forward an Anthropic body to an OpenAI endpoint and produce a
-			// confusing upstream 400. Skipping it here turns that into a clear
-			// gateway error naming the real problem.
-			if !servesEndpoint(provider, req.Meta.Endpoint) {
-				continue
-			}
-			return d, nil
-		}
-	}
-
-	// The three outcomes are distinguished because they mean different things
-	// to the caller: a typo, a capacity problem, and a policy refusal.
-	switch {
-	case !sawAny:
-		return core.Deployment{}, core.Newf(core.CodeModelNotFound, "no model named %q", req.Meta.Model)
-	case !sawServing:
-		return core.Deployment{}, core.Newf(core.CodeNoCandidates, "no deployment of %q is serving traffic", req.Meta.Model)
-	case !sawTier:
-		return core.Deployment{}, core.Newf(core.CodeTrustTierDenied,
-			"no deployment of %q meets the required trust tier %s", req.Meta.Model, minTier)
-	default:
-		return core.Deployment{}, core.Newf(core.CodeEndpointUnsupported,
-			"%q is not served on this endpoint", req.Meta.Model)
-	}
-}
-
-// servesEndpoint reports whether an adapter speaks the requested API surface.
-func servesEndpoint(provider core.ProviderPort, endpoint core.Endpoint) bool {
-	return slices.Contains(provider.Endpoints(), endpoint)
-}
-
-// adapt makes the upstream call.
-func (p *Pipeline) adapt(ctx context.Context, d core.Deployment, req *Request) (*core.ProviderResponse, error) {
-	provider, ok := p.providers.Provider(d.Provider)
-	if !ok {
-		// route already checked this; reaching here means the registry changed
-		// underneath us, which is a bug rather than a caller error.
-		return nil, core.Newf(core.CodeInternal, "provider %q vanished between routing and execution", d.Provider)
-	}
-
-	credential, err := p.credentials.Resolve(ctx, d.CredentialRef)
-	if err != nil {
-		return nil, err
-	}
-
-	return provider.Invoke(ctx, &core.ProviderCall{
-		Deployment: d,
-		Meta:       req.Meta,
-		Body:       req.Body,
-		Credential: credential,
+	return p.router.Select(router.SelectionInput{
+		Snapshot:     snap,
+		Tenant:       principal.Tenant,
+		Model:        req.Meta.Model,
+		Endpoint:     req.Meta.Endpoint,
+		MinTrustTier: minTier,
 	})
+}
+
+// adapt executes the candidate list, returning whichever deployment served it.
+// The streaming flag comes from which method called this, not from
+// req.Meta.Stream. HandleStream is the streaming path; reading the caller's
+// metadata instead would let a transport that set it wrong get a completed
+// body where it expected a cursor, and discover it as a nil dereference.
+func (p *Pipeline) adapt(
+	ctx context.Context, candidates []router.Candidate, req *Request, stream bool,
+) (*router.Result, error) {
+	return p.router.Execute(ctx, candidates, req.Meta.Deadline,
+		func(ctx context.Context, provider core.ProviderPort, d core.Deployment) (
+			*core.ProviderResponse, core.ChunkStream, error,
+		) {
+			// Resolved per attempt rather than once, because each candidate
+			// may be a different provider with a different credential.
+			credential, err := p.credentials.Resolve(ctx, d.CredentialRef)
+			if err != nil {
+				return nil, nil, err
+			}
+			call := &core.ProviderCall{
+				Deployment: d, Meta: req.Meta, Body: req.Body, Credential: credential,
+			}
+			if stream {
+				chunks, err := provider.Stream(ctx, call)
+				return nil, chunks, err
+			}
+			response, err := provider.Invoke(ctx, call)
+			return response, nil, err
+		})
 }
