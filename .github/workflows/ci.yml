@@ -65,7 +65,7 @@ jobs:
         run: git diff --exit-code || { echo "::error::run 'make proto' and commit the result"; exit 1; }
 
   crosslanguage:
-    name: Cross-language snapshot contract
+    name: Cross-language and live subscription
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -80,6 +80,11 @@ jobs:
       # Unit tests on either side can both pass while the two disagree about
       # the bytes. This is the only check that catches that.
       - run: ./scripts/cross-language-check.sh
+      # The file-based check proves the two languages agree on the bytes. This
+      # proves configuration actually reaches a running worker, and that traffic
+      # survives the control plane going away — a claim that is otherwise only
+      # in a design document.
+      - run: ./scripts/live-subscription-check.sh
 
   controlplane:
     name: Control plane (Python)

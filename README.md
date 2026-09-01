@@ -130,11 +130,11 @@ decided and why.
 | M3 — `ProviderPort` for real: OpenAI-compatible adapter, SSE streaming, `SecretsPort` | **done** |
 | M3b — Anthropic adapter and `/v1/messages` | **done** |
 | M4 — Usage events, `TelemetryPort`, Prometheus, cost attribution | **done** |
-| M4b — OTel spans and OTLP export | |
+| M4b — OTel spans and OTLP export | next |
 | M5a — Control plane: domain model, snapshot builder, `gatewayctl` | **done** |
 | M5b — Postgres schema, migrations, repository | **done** |
 | M5c — Admin API, key rotation | **done** |
-| M5d — Snapshot subscriber: worker fetches from the control plane | next |
+| M5d — Snapshot subscriber: worker fetches from the control plane | **done** |
 | M6 — Rate limits and budgets | |
 | M7 — Router: selection/execution split, circuit breakers, health EWMA | |
 | M8 — `GuardrailPort` and policy engine | |

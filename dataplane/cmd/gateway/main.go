@@ -49,7 +49,13 @@ func run(logger *slog.Logger) error {
 	}
 	logger.Info("starting", slog.String("config", cfg.String()))
 
-	initial, err := snapshot.LoadFile(cfg.SnapshotFile)
+	// NotifyContext cancels on SIGINT or SIGTERM, which is what a container
+	// runtime sends before it kills the pod. Established before the first fetch
+	// so a worker stuck waiting on an unreachable control plane still stops.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	initial, err := bootstrap(ctx, cfg, logger)
 	if err != nil {
 		return err
 	}
@@ -58,6 +64,25 @@ func run(logger *slog.Logger) error {
 	}))
 	if err != nil {
 		return err
+	}
+
+	// Subscribing is optional: without a control plane the worker serves its
+	// bootstrap snapshot and never changes, which is a legitimate deployment
+	// for a single-tenant or air-gapped install.
+	var subscriber *snapshot.Subscriber
+	if cfg.ControlPlaneURL != "" {
+		source, err := snapshot.NewHTTPSource(cfg.ControlPlaneURL, cfg.ControlPlaneToken)
+		if err != nil {
+			return err
+		}
+		subscriber, err = snapshot.NewSubscriber(source, holder,
+			snapshot.WithInterval(cfg.SnapshotInterval),
+			snapshot.WithLogger(logger))
+		if err != nil {
+			return err
+		}
+		subscriber.Start(ctx)
+		defer subscriber.Stop()
 	}
 
 	// echo stays registered alongside the real adapter: it is what the demo
@@ -101,11 +126,18 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	server, err := httpapi.NewServer(holder, pipeline, httpapi.Options{
+	options := httpapi.Options{
 		Logger:         logger,
 		Metrics:        promhttp.HandlerFor(registry, promhttp.HandlerOpts{}),
 		TelemetryStats: emitter.Stats,
-	})
+	}
+	if subscriber != nil {
+		// Reported on /readyz because "is this worker still receiving
+		// configuration" is the first question asked when a change does not
+		// take effect, and it should not need a metrics scrape to answer.
+		options.SubscriberStats = subscriber.Stats
+	}
+	server, err := httpapi.NewServer(holder, pipeline, options)
 	if err != nil {
 		return err
 	}
@@ -117,11 +149,6 @@ func run(logger *slog.Logger) error {
 		WriteTimeout: cfg.WriteTimeout,
 		IdleTimeout:  cfg.IdleTimeout,
 	}
-
-	// NotifyContext cancels on SIGINT or SIGTERM, which is what a container
-	// runtime sends before it kills the pod.
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	errs := make(chan error, 1)
 	go func() {
@@ -146,4 +173,50 @@ func run(logger *slog.Logger) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownGrace)
 	defer cancel()
 	return httpServer.Shutdown(shutdownCtx)
+}
+
+// bootstrap obtains the snapshot the worker starts with.
+//
+// A bootstrap file is preferred when present, because it makes startup
+// independent of the control plane: a worker restarting during a control-plane
+// outage serves last-known configuration rather than failing to start, which is
+// what "a control-plane outage freezes configuration" has to mean for a process
+// that was not already running.
+//
+// Without a file, the control plane is the only source and the worker cannot
+// start until it answers. That is a real constraint and it is better stated
+// than papered over.
+func bootstrap(ctx context.Context, cfg config.Config, logger *slog.Logger) (*core.Snapshot, error) {
+	source, err := bootstrapSource(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	fetched, err := source.Fetch(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+	logger.Info("bootstrapped",
+		slog.String("source", source.Name()),
+		slog.Uint64("version", fetched.Snapshot.GlobalVersion().Number),
+		slog.String("digest", fetched.Digest))
+	return fetched.Snapshot, nil
+}
+
+// bootstrapSource picks where the worker's first snapshot comes from.
+//
+// A bootstrap file wins when present, because it makes startup independent of
+// the control plane: a worker restarting during a control-plane outage serves
+// last-known configuration rather than failing to start, which is what "a
+// control-plane outage freezes configuration" has to mean for a process that
+// was not already running.
+//
+// Without a file the control plane is the only source and the worker cannot
+// start until it answers. That is a real constraint, and it is better stated
+// than papered over.
+func bootstrapSource(cfg config.Config) (snapshot.Source, error) {
+	if cfg.SnapshotFile != "" {
+		return snapshot.NewFileSource(cfg.SnapshotFile), nil
+	}
+	return snapshot.NewHTTPSource(cfg.ControlPlaneURL, cfg.ControlPlaneToken)
 }

@@ -52,6 +52,7 @@ type Server struct {
 	newID    func() string
 	metrics  http.Handler
 	stats    func() telemetry.Stats
+	subStats func() snapshot.SubscriberStats
 }
 
 // Options configures a Server. Fields left zero take a sensible default.
@@ -64,6 +65,9 @@ type Options struct {
 	// TelemetryStats reports emitter counters on /readyz, so "are we losing
 	// usage events" is answerable without a metrics scrape.
 	TelemetryStats func() telemetry.Stats
+	// SubscriberStats reports snapshot-subscription health on /readyz, so
+	// "is this worker still receiving configuration" is answerable the same way.
+	SubscriberStats func() snapshot.SubscriberStats
 }
 
 // NewServer builds the HTTP handler set.
@@ -78,6 +82,7 @@ func NewServer(holder *snapshot.Holder, pipeline *gateway.Pipeline, opts Options
 		newID:    opts.NewID,
 		metrics:  opts.Metrics,
 		stats:    opts.TelemetryStats,
+		subStats: opts.SubscriberStats,
 	}
 	if s.logger == nil {
 		s.logger = slog.Default()
@@ -120,6 +125,17 @@ func (s *Server) handleReady(w http.ResponseWriter, _ *http.Request) {
 		"draining":         stats.PreviousInFlight,
 		"previous_loaded":  stats.PreviousLoaded,
 		"previous_version": stats.PreviousVersion.Number,
+	}
+	if s.subStats != nil {
+		sub := s.subStats()
+		body["subscriber"] = map[string]any{
+			"digest":     sub.Digest,
+			"applied":    sub.Applied,
+			"unchanged":  sub.Unchanged,
+			"failed":     sub.Failed,
+			"rejected":   sub.Rejected,
+			"last_error": sub.LastError,
+		}
 	}
 	if s.stats != nil {
 		t := s.stats()

@@ -17,7 +17,7 @@ help: ## Show this help
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | awk -F':.*?## ' '{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 
 .PHONY: check
-check: check-go check-py cover crosscheck ## Run every check CI runs
+check: check-go check-py cover crosscheck livecheck ## Run every check CI runs
 
 .PHONY: check-go
 check-go: ## Format check, vet and test the Go data plane
@@ -39,6 +39,10 @@ check-py: ## Lint, type check and test the Python control plane
 .PHONY: crosscheck
 crosscheck: ## Prove the Python builder and the Go worker agree on the snapshot
 	./scripts/cross-language-check.sh
+
+.PHONY: livecheck
+livecheck: ## Prove configuration reaches a running worker, and survives a control-plane outage
+	./scripts/live-subscription-check.sh
 
 .PHONY: proto
 proto: ## Regenerate Go code from proto/ (needs protoc and protoc-gen-go)
