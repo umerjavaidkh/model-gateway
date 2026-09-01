@@ -50,8 +50,9 @@ type BudgetState struct {
 
 	// HeadroomBasisPoints holds back a slice of a hard limit so that requests
 	// already streaming when the budget tips can finish without overshooting.
-	// 500 = 5%, which is the documented default.
-	HeadroomBasisPoints uint16
+	// 500 = 5%, which is the documented default. uint32 to match the wire
+	// format, for the same reason Deployment.Weight is.
+	HeadroomBasisPoints uint32
 }
 
 // Available is the spend remaining before the headroom band begins.

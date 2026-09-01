@@ -129,7 +129,12 @@ func Newf(code Code, format string, args ...any) *Error {
 
 // Wrap attaches a code and context to an error from outside the gateway.
 // It returns nil when cause is nil, so it composes with early returns.
-func Wrap(code Code, cause error, message string) *Error {
+//
+// The result is `error`, not `*Error`, deliberately. A function returning a
+// typed nil pointer into an `error` result produces a non-nil interface holding
+// a nil pointer — an error that is not nil and has no message. Returning the
+// interface type makes the nil case a real nil for every caller.
+func Wrap(code Code, cause error, message string) error {
 	if cause == nil {
 		return nil
 	}

@@ -29,6 +29,29 @@ jobs:
       # immutable state. A data race here is the one bug class we cannot ship.
       - run: go test -race -count=1 ./...
 
+  proto:
+    name: Generated code is current
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: dataplane/go.mod
+      - uses: arduino/setup-protoc@v3
+        with:
+          version: "25.3"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install protoc-gen-go at the module's protobuf version
+        working-directory: dataplane
+        run: |
+          version="$(go list -m -f '{{.Version}}' google.golang.org/protobuf)"
+          go install "google.golang.org/protobuf/cmd/protoc-gen-go@${version}"
+      # Generated code is committed so the build needs no toolchain. That only
+      # holds if it actually matches the .proto, which is what this checks.
+      - run: make proto
+      - name: Fail if regenerating changed anything
+        run: git diff --exit-code || { echo "::error::run 'make proto' and commit the result"; exit 1; }
+
   controlplane:
     name: Control plane (Python)
     runs-on: ubuntu-latest

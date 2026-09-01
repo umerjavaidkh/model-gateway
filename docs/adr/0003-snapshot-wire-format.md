@@ -1,6 +1,7 @@
 # ADR 0003 — Snapshot wire format is deferred to M1, and will be generated
 
-**Status:** accepted · 2026-08-31
+**Status:** accepted · 2026-08-31 · implemented in M2a (proto3, not editions:
+protoc 25.x treats editions as experimental)
 
 ## Context
 

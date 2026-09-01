@@ -26,6 +26,7 @@ be written in Python while the data plane is written in Go.
 dataplane/          Go. The request path: auth -> admit -> route -> adapt.
   internal/core/      Domain vocabulary: types, errors, ports, snapshot.
   internal/snapshot/  Worker-side holder: what the current configuration is.
+  internal/wire/      Snapshot wire format and its mapping to domain types.
   internal/contracts/ Per-port contract suites; also the plugin admission gate.
   internal/adapters/  Concrete port implementations.
 controlplane/       Python. Registry, identity, policy authoring, snapshot compilation.
@@ -72,7 +73,8 @@ decided and why.
 |---|---|
 | M0 — Foundation: vocabulary, ports, layered snapshot | **done** |
 | M1 — Snapshot holder: atomic swap, lease-based drain, N−1 rollback | **done** |
-| M2 — Snapshot wire format and subscriber | next |
+| M2a — Snapshot wire format: Protobuf schema, codec, digests | **done** |
+| M2b — Snapshot subscriber: fetch, watch, apply | next |
 | M2 — Data-plane vertical slice | |
 | M3 — `ProviderPort` for real: LiteLLM, streaming | |
 | M4 — Usage events and telemetry | |
