@@ -29,6 +29,7 @@ dataplane/          Go. The request path: auth -> admit -> route -> adapt.
   internal/wire/      Snapshot wire format and its mapping to domain types.
   internal/gateway/   The request path, transport-free: auth, admit, route, adapt.
   internal/httpapi/   HTTP transport. Knows about status codes; decides nothing.
+  internal/secrets/   Credential resolution. Secrets never enter a snapshot.
   cmd/gateway/        The worker binary.
   cmd/snapshotgen/    Writes a demo snapshot, so the repo runs without a control plane.
   internal/contracts/ Per-port contract suites; also the plugin admission gate.
@@ -64,6 +65,18 @@ curl -s localhost:8080/v1/chat/completions \
   -d '{"model":"fast","messages":[{"role":"user","content":"hi"}]}'
 ```
 
+To point it at a real OpenAI-compatible endpoint instead:
+
+```bash
+cd dataplane && go run ./cmd/snapshotgen -out ../snapshot.pb \
+  -pepper "$GATEWAY_KEY_PEPPER" \
+  -endpoint https://api.openai.com/v1 -model gpt-4o-mini
+```
+
+That registers a second deployment under the alias `real`, with its credential
+resolved from `OPENAI_API_KEY` at call time rather than baked into the snapshot.
+Add `"stream": true` to the request for server-sent events.
+
 The echo provider returns the request back, which is the point: the whole path —
 key authentication, model allowlist, budget check, trust-tier filtering, routing
 and the provider call — runs with no network and no database. `curl
@@ -98,7 +111,8 @@ decided and why.
 | M0 — Foundation: vocabulary, ports, layered snapshot | **done** |
 | M1 — Snapshot: schema, holder, atomic swap, N−1 rollback, file source | **done** |
 | M2 — Data-plane vertical slice: key auth, `/v1/chat/completions`, echo provider | **done** |
-| M3 — `ProviderPort` for real: LiteLLM adapter, SSE streaming | next |
+| M3 — `ProviderPort` for real: OpenAI-compatible adapter, SSE streaming, `SecretsPort` | **done** |
+| M3b — Anthropic adapter and `/v1/messages` | next |
 | M4 — Usage events, `TelemetryPort`, OTel spans | |
 | M5 — Control plane: Postgres, identity closure, snapshot builder, admin API | |
 | M6 — Rate limits and budgets | |

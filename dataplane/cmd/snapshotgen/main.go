@@ -12,6 +12,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/core"
@@ -23,37 +24,61 @@ func main() {
 	out := flag.String("out", "snapshot.pb", "file to write")
 	pepper := flag.String("pepper", "", "the key pepper the gateway will run with")
 	secret := flag.String("secret", "demo-secret", "the API key secret to provision")
+	endpoint := flag.String("endpoint", "", "an OpenAI-compatible base URL to register, e.g. https://api.openai.com/v1")
+	model := flag.String("model", "gpt-4o-mini", "the model id at -endpoint")
+	credential := flag.String("credential", "env:OPENAI_API_KEY", "credential reference for -endpoint")
 	flag.Parse()
 
-	if err := run(*out, *pepper, *secret); err != nil {
+	if err := run(*out, *pepper, *secret, *endpoint, *model, *credential); err != nil {
 		fmt.Fprintln(os.Stderr, "snapshotgen:", err)
 		os.Exit(1)
 	}
 }
 
-func run(out, pepper, secret string) error {
+func run(out, pepper, secret, endpoint, model, credential string) error {
 	if pepper == "" {
 		return errors.New("-pepper is required and must match GATEWAY_KEY_PEPPER")
 	}
 	now := time.Now().UTC()
 
+	deployments := []core.Deployment{{
+		ID:           "echo-1",
+		Key:          core.RoutingKey{BaseModel: "echo-model"},
+		Provider:     "echo",
+		Endpoint:     "in-process",
+		Region:       "local",
+		TrustTier:    core.TrustInternal,
+		Weight:       100,
+		Capabilities: []core.Capability{core.CapabilityStreaming},
+	}}
+	aliases := []core.ModelAlias{
+		{Name: "fast", Targets: []core.RoutingKey{{BaseModel: "echo-model"}}},
+	}
+
+	// A real upstream is opt-in, so the default demo needs no account and no
+	// network. Its trust tier is external, which is what a public API is.
+	if endpoint != "" {
+		deployments = append(deployments, core.Deployment{
+			ID:            "upstream-1",
+			Key:           core.RoutingKey{BaseModel: model},
+			Provider:      "openai-compatible",
+			Endpoint:      endpoint,
+			Region:        "cloud",
+			TrustTier:     core.TrustExternal,
+			CredentialRef: credential,
+			Weight:        100,
+			Capabilities:  []core.Capability{core.CapabilityStreaming},
+		})
+		aliases = append(aliases, core.ModelAlias{
+			Name: "real", Targets: []core.RoutingKey{{BaseModel: model}},
+		})
+	}
+
 	global := wire.EncodeGlobal(core.GlobalSpec{
-		Version: core.LayerVersion{Number: 1},
-		BuiltAt: now,
-		Deployments: []core.Deployment{{
-			ID:           "echo-1",
-			Key:          core.RoutingKey{BaseModel: "echo-model"},
-			Provider:     "echo",
-			Endpoint:     "in-process",
-			Region:       "local",
-			TrustTier:    core.TrustInternal,
-			Weight:       100,
-			Cost:         core.Cost{InputPer1K: 0, OutputPer1K: 0},
-			Capabilities: []core.Capability{core.CapabilityStreaming},
-		}},
-		Aliases: []core.ModelAlias{
-			{Name: "fast", Targets: []core.RoutingKey{{BaseModel: "echo-model"}}},
-		},
+		Version:         core.LayerVersion{Number: 1},
+		BuiltAt:         now,
+		Deployments:     deployments,
+		Aliases:         aliases,
 		TenantPrefixes:  map[core.KeyPrefix]core.TenantID{"demo": "demo"},
 		PolicyBundleRef: "demo",
 	})
@@ -94,6 +119,20 @@ func run(out, pepper, secret string) error {
 		return err
 	}
 
-	fmt.Printf("wrote %s (%d bytes)\napi key: gw_demo_%s\nmodels:  echo-model, fast\n", out, len(b), secret)
+	fmt.Printf("wrote %s (%d bytes)\napi key: gw_demo_%s\nmodels:  %s\n",
+		out, len(b), secret, strings.Join(modelNames(aliases, deployments), ", "))
 	return nil
+}
+
+// modelNames lists what a caller may ask for: every alias, plus every concrete
+// model id, since either is accepted.
+func modelNames(aliases []core.ModelAlias, deployments []core.Deployment) []string {
+	names := make([]string, 0, len(aliases)+len(deployments))
+	for _, a := range aliases {
+		names = append(names, a.Name)
+	}
+	for _, d := range deployments {
+		names = append(names, d.Key.BaseModel)
+	}
+	return names
 }

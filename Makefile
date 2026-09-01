@@ -22,6 +22,7 @@ check: check-go check-py cover ## Run every check CI runs
 .PHONY: check-go
 check-go: ## Format check, vet and test the Go data plane
 	@test -z "$$(cd dataplane && gofmt -l .)" || { echo "gofmt needed:"; cd dataplane && gofmt -l .; exit 1; }
+	./scripts/check-core-imports.sh
 	$(GO) vet ./...
 	$(GO) test -race -count=1 ./...
 	@command -v golangci-lint >/dev/null && (cd dataplane && golangci-lint run) \

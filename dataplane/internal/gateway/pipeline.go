@@ -137,6 +137,63 @@ func (p *Pipeline) Handle(ctx context.Context, snap *core.Snapshot, req *Request
 	return result, nil
 }
 
+// HandleStream runs the same four stages and returns a cursor over the
+// response instead of a completed body.
+//
+// It is a separate method rather than a flag on Handle because the caller's
+// obligations differ: a stream must be closed, and usage is only known once it
+// has been drained. Hiding that behind a bool would make the leak easy to write.
+func (p *Pipeline) HandleStream(ctx context.Context, snap *core.Snapshot, req *Request) (*StreamResult, error) {
+	principal, err := p.authenticate(snap, req)
+	if err != nil {
+		return nil, err
+	}
+	if err := p.admit(snap, &principal, req); err != nil {
+		return &StreamResult{Principal: principal}, err
+	}
+	deployment, err := p.route(snap, &principal, req)
+	if err != nil {
+		return &StreamResult{Principal: principal}, err
+	}
+
+	provider, ok := p.providers.Provider(deployment.Provider)
+	if !ok {
+		return nil, core.Newf(core.CodeInternal, "provider %q vanished between routing and execution", deployment.Provider)
+	}
+	credential, err := p.credentials.Resolve(ctx, deployment.CredentialRef)
+	if err != nil {
+		return &StreamResult{Principal: principal, Deployment: deployment.ID}, err
+	}
+
+	chunks, err := provider.Stream(ctx, &core.ProviderCall{
+		Deployment: deployment,
+		Meta:       req.Meta,
+		Body:       req.Body,
+		Credential: credential,
+	})
+	if err != nil {
+		return &StreamResult{Principal: principal, Deployment: deployment.ID}, err
+	}
+
+	return &StreamResult{
+		Chunks:     chunks,
+		Principal:  principal,
+		Deployment: deployment.ID,
+		Route:      deployment.Key,
+	}, nil
+}
+
+// StreamResult is a started stream plus what accounting needs about it.
+//
+// The caller owns Chunks and must Close it, including on the error path.
+type StreamResult struct {
+	Chunks core.ChunkStream
+
+	Principal  core.Principal
+	Deployment core.DeploymentID
+	Route      core.RoutingKey
+}
+
 // authenticate resolves a presented key to a principal in three map probes:
 // prefix to tenant, lookup to key id, key id to principal.
 func (p *Pipeline) authenticate(snap *core.Snapshot, req *Request) (core.Principal, error) {

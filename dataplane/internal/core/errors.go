@@ -141,6 +141,18 @@ func Wrap(code Code, cause error, message string) error {
 	return &Error{Code: code, Message: message, cause: cause}
 }
 
+// WrapRetryable is Wrap for a condition the router may retry against another
+// candidate — a timeout, a refused connection, a provider 503.
+//
+// It exists so that adapters do not each write a type assertion back to *Error
+// in order to reach AsRetryable.
+func WrapRetryable(code Code, cause error, message string) error {
+	if cause == nil {
+		return nil
+	}
+	return &Error{Code: code, Message: message, Retryable: true, cause: cause}
+}
+
 // CodeOf reports the Code carried by err, following the wrap chain.
 // Errors that did not originate here are CodeInternal: an unclassified error is
 // a bug in whoever failed to classify it, and reporting it as such makes that

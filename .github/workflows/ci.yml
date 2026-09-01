@@ -24,6 +24,12 @@ jobs:
           cache-dependency-path: dataplane/go.sum
       - name: gofmt
         run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      # internal/core is the vocabulary every package speaks. One import of an
+      # HTTP client or a driver turns the domain model into that library's, and
+      # the coupling is invisible until something needs replacing.
+      - name: core imports only the standard library
+        working-directory: .
+        run: ./scripts/check-core-imports.sh
       - run: go vet ./...
       # -race because the snapshot's whole design is concurrent reads of
       # immutable state. A data race here is the one bug class we cannot ship.
