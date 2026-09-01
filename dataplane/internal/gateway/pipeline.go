@@ -15,6 +15,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/core"
+	"github.com/umerjavaidkh/model-gateway/dataplane/internal/guardrails"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/limits"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/router"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/tracing"
@@ -75,6 +76,7 @@ type Pipeline struct {
 	telemetry   core.TelemetryPort
 	limiter     RateLimiter
 	router      *router.Router
+	guardrails  GuardrailChain
 	region      string
 	// pepper keys the HMAC that turns a presented key secret into the value a
 	// snapshot indexes principals by. It never enters a snapshot, so a stolen
@@ -99,6 +101,25 @@ type RateLimiter interface {
 	Admit(ctx context.Context, p *core.Principal) limits.Decision
 	Release(p *core.Principal)
 	RecordTokens(ctx context.Context, p *core.Principal, tokens int64)
+}
+
+// GuardrailChain runs the inspections bound to a tenant.
+//
+// An interface so the pipeline does not depend on how they are run, and so a
+// test can deny deterministically without a registry.
+type GuardrailChain interface {
+	Run(ctx context.Context, bindings []core.GuardrailBinding, in *core.GuardrailInput) (guardrails.Outcome, error)
+}
+
+// WithGuardrails sets the guardrail chain. Without one, bindings in the
+// snapshot are carried but nothing inspects anything — the right default for a
+// unit test and the wrong one for a worker, so main always supplies it.
+func WithGuardrails(chain GuardrailChain) Option {
+	return func(p *Pipeline) {
+		if chain != nil {
+			p.guardrails = chain
+		}
+	}
 }
 
 // WithRegion tells selection where this worker runs, so a deployment in the
@@ -156,6 +177,7 @@ func New(providers ProviderRegistry, credentials CredentialResolver, pepper []by
 		credentials: credentials,
 		telemetry:   discardTelemetry{},
 		limiter:     unlimited{},
+		guardrails:  inspectNothing{},
 		pepper:      pepper,
 		now:         time.Now,
 	}
@@ -211,6 +233,19 @@ func (p *Pipeline) Handle(ctx context.Context, snap *core.Snapshot, req *Request
 	// The slot is held for the whole request, which is what makes a
 	// concurrency limit mean anything. Released on every exit path below.
 	defer p.limiter.Release(&principal)
+
+	// Before routing, not after: a credential in the payload must be caught
+	// before the gateway decides where to send it, and certainly before it
+	// sends it. The tier-dependent inspections the design places after routing
+	// are the PII chain, which is a separate stage.
+	body, err := stage(ctx, "guard", func() ([]byte, error) {
+		return p.guard(ctx, snap, &principal, req)
+	})
+	if err != nil {
+		emit(err)
+		return result, err
+	}
+	req.Body = body
 
 	candidates, err := stage(ctx, "route", func() ([]router.Candidate, error) {
 		return p.route(snap, &principal, req)
@@ -366,6 +401,13 @@ func (p *Pipeline) HandleStream(ctx context.Context, snap *core.Snapshot, req *R
 	// mean anything for a response that takes a minute. Released by Finish.
 	result.releaseLimit = func() { p.limiter.Release(&principal) }
 
+	body, err := p.guard(ctx, snap, &principal, req)
+	if err != nil {
+		emit(err)
+		return result, err
+	}
+	req.Body = body
+
 	candidates, err := p.route(snap, &principal, req)
 	if err != nil {
 		emit(err)
@@ -503,6 +545,45 @@ func (unlimited) Release(*core.Principal) {}
 
 // RecordTokens discards the count.
 func (unlimited) RecordTokens(context.Context, *core.Principal, int64) {}
+
+// guard runs the tenant's request-leg guardrails, returning the payload to
+// send onward — which a guardrail may have rewritten.
+func (p *Pipeline) guard(
+	ctx context.Context, snap *core.Snapshot, principal *core.Principal, req *Request,
+) ([]byte, error) {
+	bindings := snap.Guardrails(principal.Tenant, core.PhaseRequest)
+	if len(bindings) == 0 {
+		return req.Body, nil
+	}
+
+	outcome, err := p.guardrails.Run(ctx, bindings, &core.GuardrailInput{
+		Phase:   core.PhaseRequest,
+		Meta:    req.Meta,
+		Class:   principal.DefaultClass,
+		Payload: req.Body,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if outcome.Denied {
+		// The guardrail's own message is deliberately not relayed. Telling a
+		// caller exactly which pattern their payload tripped is telling them
+		// how to avoid it next time.
+		return nil, core.Newf(core.CodeGuardrailDenied,
+			"request refused by the %s guardrail", outcome.Reason)
+	}
+	return outcome.Payload, nil
+}
+
+// inspectNothing is the default chain: no guardrail runs.
+type inspectNothing struct{}
+
+// Run allows everything unchanged.
+func (inspectNothing) Run(
+	_ context.Context, _ []core.GuardrailBinding, in *core.GuardrailInput,
+) (guardrails.Outcome, error) {
+	return guardrails.Outcome{Payload: in.Payload}, nil
+}
 
 // route selects an ordered list of deployments that may serve the request.
 //

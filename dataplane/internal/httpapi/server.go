@@ -26,6 +26,7 @@ import (
 
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/core"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/gateway"
+	"github.com/umerjavaidkh/model-gateway/dataplane/internal/guardrails"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/router"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/snapshot"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/telemetry"
@@ -61,6 +62,7 @@ type Server struct {
 	stats       func() telemetry.Stats
 	subStats    func() snapshot.SubscriberStats
 	routerStats func() []router.DeploymentHealth
+	guardStats  func() guardrails.Stats
 }
 
 // Options configures a Server. Fields left zero take a sensible default.
@@ -79,6 +81,10 @@ type Options struct {
 	// RouterStats reports per-deployment health and breaker state, which is
 	// what answers "why is traffic going there" during an incident.
 	RouterStats func() []router.DeploymentHealth
+	// GuardrailStats reports how often guardrails refused, rewrote, or failed
+	// open. The last of those is the one that matters: a control an operator
+	// believes is enforcing and is not.
+	GuardrailStats func() guardrails.Stats
 }
 
 // NewServer builds the HTTP handler set.
@@ -95,6 +101,7 @@ func NewServer(holder *snapshot.Holder, pipeline *gateway.Pipeline, opts Options
 		stats:       opts.TelemetryStats,
 		subStats:    opts.SubscriberStats,
 		routerStats: opts.RouterStats,
+		guardStats:  opts.GuardrailStats,
 	}
 	if s.logger == nil {
 		s.logger = slog.Default()
@@ -160,6 +167,17 @@ func (s *Server) handleReady(w http.ResponseWriter, _ *http.Request) {
 			})
 		}
 		body["router"] = deployments
+	}
+	if s.guardStats != nil {
+		g := s.guardStats()
+		body["guardrails"] = map[string]any{
+			"evaluated":   g.Evaluated,
+			"denied":      g.Denied,
+			"mutated":     g.Mutated,
+			"failed_open": g.FailedOpen,
+			"failed_shut": g.FailedShut,
+			"skipped":     g.Skipped,
+		}
 	}
 	if s.stats != nil {
 		t := s.stats()

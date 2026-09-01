@@ -248,3 +248,50 @@ def test_unset_cache_rates_stay_zero_rather_than_defaulting_here() -> None:
     cost = Cost(input_per_1k_micro_usd=3000, output_per_1k_micro_usd=15000)
     assert cost.cached_input_per_1k_micro_usd == 0
     assert cost.cache_write_per_1k_micro_usd == 0
+
+
+def test_guardrail_bindings_reach_the_snapshot(fleet: Fleet, tenant: Tenant) -> None:
+    # A guardrail the worker never sees is a control that is not enforcing,
+    # while an operator believes it is.
+    from model_gateway_control.domain.tenant import FailureMode, GuardrailBinding
+
+    guarded = dataclasses.replace(
+        tenant,
+        guardrails=(
+            GuardrailBinding(
+                component="secret-scan",
+                timeout_ms=5,
+                failure_mode=FailureMode.CLOSED,
+                blocking=True,
+            ),
+            GuardrailBinding(
+                component="injection-heuristics",
+                timeout_ms=50,
+                failure_mode=FailureMode.OPEN,
+                blocking=False,
+            ),
+        ),
+    )
+
+    snapshot = build_snapshot(fleet, [guarded], BUILT_AT)
+    bindings = {g.component: g for g in snapshot.tenants[0].guardrails}
+
+    assert bindings["secret-scan"].blocking is True
+    assert bindings["secret-scan"].timeout_ms == 5
+    assert bindings["injection-heuristics"].blocking is False
+
+
+def test_a_guardrail_needs_a_positive_timeout() -> None:
+    # A zero timeout is not "no limit"; the data plane would substitute its
+    # default and the declared budget would be a fiction.
+    from model_gateway_control.domain.tenant import GuardrailBinding
+
+    with pytest.raises(InvalidRequestError, match="positive timeout"):
+        GuardrailBinding(component="secret-scan", timeout_ms=0)
+
+
+def test_an_unknown_guardrail_phase_is_rejected() -> None:
+    from model_gateway_control.domain.tenant import GuardrailBinding
+
+    with pytest.raises(InvalidRequestError, match="unknown guardrail phase"):
+        GuardrailBinding(component="secret-scan", phases=("midflight",))

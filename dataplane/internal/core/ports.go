@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"slices"
 	"time"
 )
 
@@ -204,12 +205,38 @@ type GuardrailResult struct {
 }
 
 // GuardrailBudget is the latency and failure contract a guardrail is admitted
-// under. It is declared in the component manifest and enforced by the caller,
-// not trusted to the implementation.
+// under.
+//
+// Enforced by the caller, never trusted to the implementation: a guardrail that
+// hangs must not be able to hang the request, and asking it to police its own
+// timeout assumes the thing that just failed.
 type GuardrailBudget struct {
-	Timeout  time.Duration
-	Mode     FailureMode
-	Blocking bool // non-blocking guardrails run off-path and can only alert
+	Timeout time.Duration
+	Mode    FailureMode
+	// Blocking guardrails run inline and may refuse or rewrite. Non-blocking
+	// ones run off the request path on a copy and can only alert, which is the
+	// honest shape for anything whose accuracy does not justify refusing real
+	// traffic.
+	Blocking bool
+	// Phases the guardrail inspects. Empty means the request leg only.
+	Phases []Phase
+}
+
+// GuardrailBinding is a guardrail and the budget it runs under, as carried in
+// a snapshot.
+type GuardrailBinding struct {
+	Component string
+	Version   string
+	ConfigRef string
+	Budget    GuardrailBudget
+}
+
+// Inspects reports whether this binding runs on the given leg.
+func (b GuardrailBinding) Inspects(phase Phase) bool {
+	if len(b.Budget.Phases) == 0 {
+		return phase == PhaseRequest
+	}
+	return slices.Contains(b.Budget.Phases, phase)
 }
 
 // GuardrailPort inspects, and optionally rewrites, a payload on either leg.

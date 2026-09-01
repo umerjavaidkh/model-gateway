@@ -21,13 +21,16 @@ import (
 
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/adapters/anthropic"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/adapters/echo"
+	"github.com/umerjavaidkh/model-gateway/dataplane/internal/adapters/injectionheuristics"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/adapters/memkv"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/adapters/openaicompat"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/adapters/rediskv"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/adapters/redisstream"
+	"github.com/umerjavaidkh/model-gateway/dataplane/internal/adapters/secretscan"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/config"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/core"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/gateway"
+	"github.com/umerjavaidkh/model-gateway/dataplane/internal/guardrails"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/httpapi"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/limits"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/router"
@@ -190,6 +193,19 @@ func run(logger *slog.Logger) error {
 		}
 	}()
 
+	guardrailRegistry, err := guardrails.NewStaticRegistry(
+		secretscan.New(), injectionheuristics.New())
+	if err != nil {
+		return err
+	}
+	guardrailChain, err := guardrails.New(guardrailRegistry, guardrails.WithLogger(logger))
+	if err != nil {
+		return err
+	}
+	// Drained after the HTTP server, so alerts from the last in-flight
+	// requests are not lost to a deploy.
+	defer guardrailChain.Wait()
+
 	rt, err := router.New(providers, router.WithLogger(logger))
 	if err != nil {
 		return err
@@ -211,7 +227,8 @@ func run(logger *slog.Logger) error {
 		gateway.WithTelemetry(emitter),
 		gateway.WithLimiter(limiter),
 		gateway.WithRouter(rt),
-		gateway.WithRegion(cfg.Region))
+		gateway.WithRegion(cfg.Region),
+		gateway.WithGuardrails(guardrailChain))
 	if err != nil {
 		return err
 	}
@@ -221,6 +238,7 @@ func run(logger *slog.Logger) error {
 		TelemetryStats: emitter.Stats,
 	}
 	options.RouterStats = rt.Stats
+	options.GuardrailStats = guardrailChain.Stats
 	if subscriber != nil {
 		// Reported on /readyz because "is this worker still receiving
 		// configuration" is the first question asked when a change does not

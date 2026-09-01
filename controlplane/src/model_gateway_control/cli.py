@@ -26,7 +26,13 @@ from model_gateway_control.domain.catalog import (
     TrustTier,
 )
 from model_gateway_control.domain.identity import BudgetRef, Principal, RateLimit, issue_key
-from model_gateway_control.domain.tenant import Fleet, PluginBinding, Tenant
+from model_gateway_control.domain.tenant import (
+    FailureMode,
+    Fleet,
+    GuardrailBinding,
+    PluginBinding,
+    Tenant,
+)
 from model_gateway_control.errors import GatewayError, InvalidRequestError
 from model_gateway_control.snapshot import build_snapshot
 
@@ -80,6 +86,7 @@ def _parse_fleet(raw: dict[str, Any]) -> Fleet:
             for a in raw.get("aliases", [])
         ),
         default_plugins=tuple(_parse_plugin(p) for p in raw.get("default_plugins", [])),
+        default_guardrails=tuple(_parse_guardrail(g) for g in raw.get("default_guardrails", [])),
         policy_bundle_ref=raw.get("policy_bundle_ref", ""),
     )
 
@@ -123,6 +130,18 @@ def _parse_plugin(raw: dict[str, Any]) -> PluginBinding:
         component=raw["component"],
         version=raw.get("version", ""),
         config_ref=raw.get("config_ref", ""),
+    )
+
+
+def _parse_guardrail(raw: dict[str, Any]) -> GuardrailBinding:
+    return GuardrailBinding(
+        component=raw["component"],
+        version=raw.get("version", ""),
+        config_ref=raw.get("config_ref", ""),
+        timeout_ms=int(raw.get("timeout_ms", 50)),
+        failure_mode=FailureMode(raw.get("failure_mode", "closed")),
+        blocking=bool(raw.get("blocking", True)),
+        phases=tuple(raw.get("phases", [])),
     )
 
 
@@ -187,6 +206,7 @@ def _parse_tenant(raw: dict[str, Any], pepper: bytes) -> tuple[Tenant, list[tupl
         ),
         budgets=budgets,
         plugins=tuple(_parse_plugin(p) for p in raw.get("plugins", [])),
+        guardrails=tuple(_parse_guardrail(g) for g in raw.get("guardrails", [])),
         min_trust_tier=_parse_trust_tier(raw.get("min_trust_tier", "EXTERNAL")),
     )
     return tenant, issued

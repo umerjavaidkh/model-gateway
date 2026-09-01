@@ -10,26 +10,62 @@
         "region": "local",
         "trust_tier": "internal",
         "weight": 100,
-        "capabilities": ["streaming"]
+        "capabilities": [
+          "streaming"
+        ]
       }
     ],
-    "aliases": [{ "name": "fast", "targets": ["echo-model"] }],
-    "policy_bundle_ref": "demo"
+    "aliases": [
+      {
+        "name": "fast",
+        "targets": [
+          "echo-model"
+        ]
+      }
+    ],
+    "policy_bundle_ref": "demo",
+    "default_guardrails": [
+      {
+        "component": "secret-scan",
+        "timeout_ms": 5,
+        "failure_mode": "closed",
+        "blocking": true
+      },
+      {
+        "component": "injection-heuristics",
+        "timeout_ms": 50,
+        "failure_mode": "open",
+        "blocking": false
+      }
+    ]
   },
   "tenants": [
     {
       "id": "demo",
       "tier": "demo",
       "version": 1,
-      "key_prefixes": ["demo"],
+      "key_prefixes": [
+        "demo"
+      ],
       "min_trust_tier": "external",
-      "budgets": [{ "id": "demo-monthly", "scope": "ORG", "limit_micro_usd": 10000000 }],
+      "budgets": [
+        {
+          "id": "demo-monthly",
+          "scope": "ORG",
+          "limit_micro_usd": 10000000
+        }
+      ],
       "keys": [
         {
           "key_id": "demo-key",
           "org": "demo-org",
           "models_allow_all": true,
-          "budgets": [{ "id": "demo-monthly", "scope": "ORG" }],
+          "budgets": [
+            {
+              "id": "demo-monthly",
+              "scope": "ORG"
+            }
+          ],
           "data_class": "internal"
         }
       ]
