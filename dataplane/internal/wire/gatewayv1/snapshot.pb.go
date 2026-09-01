@@ -1187,9 +1187,13 @@ func (x *TenantLayer) GetMinTrustTier() TrustTier {
 // are also transferable on their own; this message is the full-fetch form used
 // on worker startup and after a watch stream gap.
 type Snapshot struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Global        *GlobalLayer           `protobuf:"bytes,1,opt,name=global,proto3" json:"global,omitempty"`
-	Tenants       []*TenantLayer         `protobuf:"bytes,2,rep,name=tenants,proto3" json:"tenants,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Named global_layer rather than global: the field name is not on the wire —
+	// tag numbers are — but `global` is a reserved word in Python, which makes
+	// the generated binding reachable only through getattr(). A name that is
+	// awkward in one of the two languages that must read this is the wrong name.
+	GlobalLayer   *GlobalLayer   `protobuf:"bytes,1,opt,name=global_layer,json=globalLayer,proto3" json:"global_layer,omitempty"`
+	Tenants       []*TenantLayer `protobuf:"bytes,2,rep,name=tenants,proto3" json:"tenants,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1224,9 +1228,9 @@ func (*Snapshot) Descriptor() ([]byte, []int) {
 	return file_gateway_v1_snapshot_proto_rawDescGZIP(), []int{12}
 }
 
-func (x *Snapshot) GetGlobal() *GlobalLayer {
+func (x *Snapshot) GetGlobalLayer() *GlobalLayer {
 	if x != nil {
-		return x.Global
+		return x.GlobalLayer
 	}
 	return nil
 }
@@ -1336,9 +1340,9 @@ const file_gateway_v1_snapshot_proto_rawDesc = "" +
 	"\abudgets\x18\b \x03(\v2\x17.gateway.v1.BudgetStateR\abudgets\x123\n" +
 	"\aplugins\x18\t \x03(\v2\x19.gateway.v1.PluginBindingR\aplugins\x12;\n" +
 	"\x0emin_trust_tier\x18\n" +
-	" \x01(\x0e2\x15.gateway.v1.TrustTierR\fminTrustTier\"n\n" +
-	"\bSnapshot\x12/\n" +
-	"\x06global\x18\x01 \x01(\v2\x17.gateway.v1.GlobalLayerR\x06global\x121\n" +
+	" \x01(\x0e2\x15.gateway.v1.TrustTierR\fminTrustTier\"y\n" +
+	"\bSnapshot\x12:\n" +
+	"\fglobal_layer\x18\x01 \x01(\v2\x17.gateway.v1.GlobalLayerR\vglobalLayer\x121\n" +
 	"\atenants\x18\x02 \x03(\v2\x17.gateway.v1.TenantLayerR\atenants*w\n" +
 	"\tTrustTier\x12\x1a\n" +
 	"\x16TRUST_TIER_UNSPECIFIED\x10\x00\x12\x17\n" +
@@ -1417,7 +1421,7 @@ var file_gateway_v1_snapshot_proto_depIdxs = []int32{
 	9,  // 18: gateway.v1.TenantLayer.budgets:type_name -> gateway.v1.BudgetState
 	8,  // 19: gateway.v1.TenantLayer.plugins:type_name -> gateway.v1.PluginBinding
 	0,  // 20: gateway.v1.TenantLayer.min_trust_tier:type_name -> gateway.v1.TrustTier
-	13, // 21: gateway.v1.Snapshot.global:type_name -> gateway.v1.GlobalLayer
+	13, // 21: gateway.v1.Snapshot.global_layer:type_name -> gateway.v1.GlobalLayer
 	14, // 22: gateway.v1.Snapshot.tenants:type_name -> gateway.v1.TenantLayer
 	23, // [23:23] is the sub-list for method output_type
 	23, // [23:23] is the sub-list for method input_type

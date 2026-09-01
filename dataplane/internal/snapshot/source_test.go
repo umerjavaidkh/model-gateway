@@ -30,7 +30,7 @@ func writeSnapshot(t *testing.T, tamper func(*pb.Snapshot)) string {
 		t.Fatalf("SealTenant: %v", err)
 	}
 
-	msg := &pb.Snapshot{Global: global, Tenants: []*pb.TenantLayer{tenant}}
+	msg := &pb.Snapshot{GlobalLayer: global, Tenants: []*pb.TenantLayer{tenant}}
 	if tamper != nil {
 		tamper(msg)
 	}
@@ -60,7 +60,7 @@ func TestLoadFileRejectsATamperedLayer(t *testing.T) {
 	// Verification happens before decoding, so corruption is reported as
 	// corruption rather than as whatever validation error it happens to cause.
 	path := writeSnapshot(t, func(msg *pb.Snapshot) {
-		msg.GetGlobal().GetDeployments()[0].Weight = 50
+		msg.GetGlobalLayer().GetDeployments()[0].Weight = 50
 	})
 	if _, err := snapshot.LoadFile(path); err == nil {
 		t.Fatal("expected a digest mismatch")

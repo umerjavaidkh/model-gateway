@@ -183,6 +183,10 @@ message TenantLayer {
 // are also transferable on their own; this message is the full-fetch form used
 // on worker startup and after a watch stream gap.
 message Snapshot {
-  GlobalLayer global = 1;
+  // Named global_layer rather than global: the field name is not on the wire —
+  // tag numbers are — but `global` is a reserved word in Python, which makes
+  // the generated binding reachable only through getattr(). A name that is
+  // awkward in one of the two languages that must read this is the wrong name.
+  GlobalLayer global_layer = 1;
   repeated TenantLayer tenants = 2;
 }

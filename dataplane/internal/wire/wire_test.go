@@ -108,8 +108,8 @@ func TestZeroTimeStaysZero(t *testing.T) {
 
 func TestDecodeSnapshotProducesAServableSnapshot(t *testing.T) {
 	msg := &pb.Snapshot{
-		Global:  wire.EncodeGlobal(fullGlobalSpec()),
-		Tenants: []*pb.TenantLayer{wire.EncodeTenant(fullTenantSpec())},
+		GlobalLayer: wire.EncodeGlobal(fullGlobalSpec()),
+		Tenants:     []*pb.TenantLayer{wire.EncodeTenant(fullTenantSpec())},
 	}
 
 	snap, err := wire.DecodeSnapshot(msg)
@@ -141,7 +141,7 @@ func TestDecodeSnapshotRejectsAnIncoherentPayload(t *testing.T) {
 	global := wire.EncodeGlobal(fullGlobalSpec())
 	global.Deployments[0].TrustTier = pb.TrustTier_TRUST_TIER_UNSPECIFIED
 
-	if _, err := wire.DecodeSnapshot(&pb.Snapshot{Global: global}); err == nil {
+	if _, err := wire.DecodeSnapshot(&pb.Snapshot{GlobalLayer: global}); err == nil {
 		t.Fatal("expected the decode to fail core's validation")
 	}
 }
@@ -161,7 +161,7 @@ func TestAnUnknownEnumValueFailsTheLayer(t *testing.T) {
 	global := wire.EncodeGlobal(fullGlobalSpec())
 	global.Deployments[0].TrustTier = pb.TrustTier(9999)
 
-	if _, err := wire.DecodeSnapshot(&pb.Snapshot{Global: global}); err == nil {
+	if _, err := wire.DecodeSnapshot(&pb.Snapshot{GlobalLayer: global}); err == nil {
 		t.Fatal("an unknown trust tier must fail the layer rather than default")
 	}
 }
@@ -172,7 +172,7 @@ func TestAnOutOfRangeWeightFailsTheLayer(t *testing.T) {
 	global := wire.EncodeGlobal(fullGlobalSpec())
 	global.Deployments[0].Weight = 300
 
-	if _, err := wire.DecodeSnapshot(&pb.Snapshot{Global: global}); err == nil {
+	if _, err := wire.DecodeSnapshot(&pb.Snapshot{GlobalLayer: global}); err == nil {
 		t.Fatal("an out-of-range weight must fail the layer")
 	}
 }
@@ -272,8 +272,8 @@ func TestUnmarshalRejectsGarbage(t *testing.T) {
 
 func TestBytesRoundTripThroughMarshal(t *testing.T) {
 	msg := &pb.Snapshot{
-		Global:  wire.EncodeGlobal(fullGlobalSpec()),
-		Tenants: []*pb.TenantLayer{wire.EncodeTenant(fullTenantSpec())},
+		GlobalLayer: wire.EncodeGlobal(fullGlobalSpec()),
+		Tenants:     []*pb.TenantLayer{wire.EncodeTenant(fullTenantSpec())},
 	}
 	b, err := wire.Marshal(msg)
 	if err != nil {

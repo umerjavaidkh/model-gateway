@@ -1,0 +1,210 @@
+"""The builder produces the artifact the Go data plane serves from.
+
+The assertions here are about *shape and invariants*. Whether the Go side reads
+the same bytes back is proven separately, in test_cross_language.py, because no
+amount of Python-side testing can establish that.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+
+import pytest
+
+from model_gateway_control.domain.budget import Budget, BudgetScope
+from model_gateway_control.domain.catalog import ModelAlias, RoutingKey, TrustTier
+from model_gateway_control.domain.identity import BudgetRef, Principal
+from model_gateway_control.domain.tenant import Fleet, Tenant
+from model_gateway_control.errors import InvalidRequestError
+from model_gateway_control.snapshot import build_snapshot, seal
+from tests.conftest import BUILT_AT, ROUTE_GPT, ROUTE_LLAMA
+
+
+def test_snapshot_carries_both_layers(fleet: Fleet, tenant: Tenant) -> None:
+    snapshot = build_snapshot(fleet, [tenant], BUILT_AT)
+
+    assert snapshot.global_layer.version.number == 7
+    assert len(snapshot.global_layer.deployments) == 3
+    assert len(snapshot.tenants) == 1
+    assert snapshot.tenants[0].tenant == "acme"
+    assert snapshot.tenants[0].version.number == 3
+
+
+def test_key_prefixes_are_folded_into_the_global_layer(fleet: Fleet, tenant: Tenant) -> None:
+    # Resolving a key must find its tenant before any tenant layer is consulted,
+    # which is why the map lives in the global half.
+    snapshot = build_snapshot(fleet, [tenant], BUILT_AT)
+    assert dict(snapshot.global_layer.tenant_prefixes) == {"acme": "acme"}
+
+
+def test_every_layer_is_sealed(fleet: Fleet, tenant: Tenant) -> None:
+    snapshot = build_snapshot(fleet, [tenant], BUILT_AT)
+
+    assert snapshot.global_layer.version.digest.startswith("sha256:")
+    assert snapshot.tenants[0].version.digest.startswith("sha256:")
+    assert snapshot.global_layer.version.digest != snapshot.tenants[0].version.digest
+
+
+def test_the_same_input_produces_the_same_digest(fleet: Fleet, tenant: Tenant) -> None:
+    # Protobuf map ordering is arbitrary by default, so a non-deterministic
+    # digest would differ between producer and verifier and reject layers at
+    # random.
+    first = build_snapshot(fleet, [tenant], BUILT_AT)
+    second = build_snapshot(fleet, [tenant], BUILT_AT)
+
+    assert first.global_layer.version.digest == second.global_layer.version.digest
+    assert first.tenants[0].version.digest == second.tenants[0].version.digest
+    assert first.SerializeToString(deterministic=True) == second.SerializeToString(
+        deterministic=True
+    )
+
+
+def test_the_digest_covers_the_payload_not_just_the_header(fleet: Fleet, tenant: Tenant) -> None:
+    before = build_snapshot(fleet, [tenant], BUILT_AT).global_layer.version.digest
+
+    changed = dataclasses.replace(
+        fleet,
+        deployments=(
+            dataclasses.replace(fleet.deployments[0], weight=50),
+            *fleet.deployments[1:],
+        ),
+    )
+    after = build_snapshot(changed, [tenant], BUILT_AT).global_layer.version.digest
+
+    assert before != after
+
+
+def test_sealing_twice_is_stable(fleet: Fleet, tenant: Tenant) -> None:
+    # The digest is computed with the digest field cleared, so re-sealing must
+    # not hash the previous hash.
+    snapshot = build_snapshot(fleet, [tenant], BUILT_AT)
+    first = snapshot.global_layer.version.digest
+    assert seal(snapshot.global_layer) == first
+
+
+def test_keys_are_emitted_in_a_stable_order(fleet: Fleet) -> None:
+    # Dictionary ordering must not reach the digest, or the same configuration
+    # produces a different artifact on every build.
+    from model_gateway_control.domain.identity import compute_key_lookup
+    from tests.conftest import PEPPER
+
+    principals = tuple(
+        Principal(key_id=f"key-{i}", tenant="acme", models_allow_all=True) for i in range(20)
+    )
+    keys = {compute_key_lookup(PEPPER, f"secret-{i}"): f"key-{i}" for i in range(20)}
+    tenant = Tenant(id="acme", key_prefixes=("acme",), principals=principals, keys=keys)
+
+    first = build_snapshot(fleet, [tenant], BUILT_AT)
+    second = build_snapshot(fleet, [tenant], BUILT_AT)
+    assert first.tenants[0].version.digest == second.tenants[0].version.digest
+
+
+def test_tenant_alias_overrides_are_kept_separate(fleet: Fleet, tenant: Tenant) -> None:
+    # The layering exists so the same global catalog means different things per
+    # tenant. Merging them at build time would throw that away.
+    snapshot = build_snapshot(fleet, [tenant], BUILT_AT)
+
+    global_fast = {a.name: a for a in snapshot.global_layer.aliases}["fast"]
+    tenant_fast = {a.name: a for a in snapshot.tenants[0].alias_overrides}["fast"]
+
+    assert global_fast.targets[0].base_model == ROUTE_GPT.base_model
+    assert tenant_fast.targets[0].base_model == ROUTE_LLAMA.base_model
+
+
+def test_adapter_is_a_separate_routing_target(fleet: Fleet, tenant: Tenant) -> None:
+    snapshot = build_snapshot(fleet, [tenant], BUILT_AT)
+    by_id = {d.id: d for d in snapshot.global_layer.deployments}
+
+    assert by_id["vllm-1"].key.adapter_id == ""
+    assert by_id["vllm-1-triage"].key.adapter_id == "triage-v3"
+    # A pre-canary adapter is registered but not serving.
+    assert by_id["vllm-1-triage"].weight == 0
+
+
+def test_credentials_are_references_never_secrets(fleet: Fleet, tenant: Tenant) -> None:
+    # A snapshot is replicated to every worker, cached and versioned. Anything
+    # secret-shaped in it is multiplied across the fleet and outlives rotation.
+    snapshot = build_snapshot(fleet, [tenant], BUILT_AT)
+    serialized = snapshot.SerializeToString()
+
+    by_id = {d.id: d for d in snapshot.global_layer.deployments}
+    assert by_id["openai-1"].credential_ref == "env:OPENAI_API_KEY"
+    assert b"sk-" not in serialized
+
+
+def test_a_dangling_alias_is_rejected(fleet: Fleet, tenant: Tenant) -> None:
+    # A 404 for a model an operator believes is configured, surfacing only when
+    # someone calls it.
+    broken = dataclasses.replace(
+        fleet, aliases=(ModelAlias(name="ghost", targets=(RoutingKey(base_model="nope"),)),)
+    )
+    with pytest.raises(InvalidRequestError, match="no deployment"):
+        build_snapshot(broken, [tenant], BUILT_AT)
+
+
+def test_a_dangling_budget_reference_is_rejected(fleet: Fleet, tenant: Tenant) -> None:
+    # Admission would silently skip a limit an operator believes is enforced.
+    broken = dataclasses.replace(
+        tenant,
+        principals=(
+            dataclasses.replace(
+                tenant.principals[0], budgets=(BudgetRef(id="ghost", scope=BudgetScope.ORG),)
+            ),
+        ),
+    )
+    with pytest.raises(InvalidRequestError, match="unknown budget"):
+        build_snapshot(fleet, [broken], BUILT_AT)
+
+
+def test_two_tenants_cannot_share_a_key_prefix(fleet: Fleet, tenant: Tenant) -> None:
+    # One of them would silently authenticate as the other.
+    other = Tenant(id="globex", key_prefixes=("acme",))
+    with pytest.raises(InvalidRequestError, match="claimed by both"):
+        build_snapshot(fleet, [tenant, other], BUILT_AT)
+
+
+def test_a_duplicate_deployment_id_is_rejected(fleet: Fleet, tenant: Tenant) -> None:
+    broken = dataclasses.replace(fleet, deployments=(*fleet.deployments, fleet.deployments[0]))
+    with pytest.raises(InvalidRequestError, match="duplicate deployment"):
+        build_snapshot(broken, [tenant], BUILT_AT)
+
+
+def test_a_principal_from_another_tenant_is_rejected(fleet: Fleet, tenant: Tenant) -> None:
+    broken = dataclasses.replace(
+        tenant, principals=(dataclasses.replace(tenant.principals[0], tenant="globex"),)
+    )
+    with pytest.raises(InvalidRequestError, match="belongs to"):
+        build_snapshot(fleet, [broken], BUILT_AT)
+
+
+def test_a_key_mapping_to_no_principal_is_rejected(fleet: Fleet, tenant: Tenant) -> None:
+    broken = dataclasses.replace(tenant, keys={b"x" * 32: "no-such-key"})
+    with pytest.raises(InvalidRequestError, match="unknown principal"):
+        build_snapshot(fleet, [broken], BUILT_AT)
+
+
+def test_a_tenant_with_no_prefix_is_rejected() -> None:
+    # It would build cleanly and then authenticate nobody.
+    with pytest.raises(InvalidRequestError, match="no key prefix"):
+        Tenant(id="acme")
+
+
+def test_a_deployment_with_no_trust_tier_is_rejected() -> None:
+    from model_gateway_control.domain.catalog import Deployment
+
+    with pytest.raises(InvalidRequestError, match="unset trust tier"):
+        Deployment(id="d", key=ROUTE_GPT, provider="p", endpoint="e", trust_tier=TrustTier.UNSET)
+
+
+def test_budget_headroom_is_held_back() -> None:
+    budget = Budget(
+        id="b",
+        scope=BudgetScope.ORG,
+        limit_micro_usd=1_000_000,
+        spent_micro_usd=940_000,
+        headroom_basis_points=500,
+    )
+    assert budget.available_micro_usd == 10_000
+
+    spent = dataclasses.replace(budget, spent_micro_usd=950_000)
+    assert spent.available_micro_usd == 0

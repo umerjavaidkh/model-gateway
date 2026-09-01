@@ -36,6 +36,12 @@ dataplane/          Go. The request path: auth -> admit -> route -> adapt.
   internal/contracts/ Per-port contract suites; also the plugin admission gate.
   internal/adapters/  Concrete port implementations.
 controlplane/       Python. Registry, identity, policy authoring, snapshot compilation.
+  domain/             Frozen dataclasses. What the control plane reasons about.
+  snapshot/builder.py Domain -> the versioned artifact the data plane serves.
+  wire/               Generated protobuf, shared with the data plane.
+  cli.py              gatewayctl.
+proto/              The snapshot schema. One definition, generated for both.
+examples/           A demo snapshot description.
 docs/adr/           Architecture decision records.
 ```
 
@@ -95,7 +101,7 @@ localhost:8080/readyz` reports which snapshot version is serving.
 make check
 ```
 
-Runs gofmt, `go vet`, `go test -race`, ruff, mypy `--strict` and pytest — the
+Runs the cross-language contract check, gofmt, `go vet`, `go test -race`, ruff, mypy `--strict` and pytest — the
 same flags CI uses. `make help` lists the rest.
 
 Requirements: Go 1.26+, Python 3.12+, [uv](https://docs.astral.sh/uv/).
@@ -122,8 +128,10 @@ decided and why.
 | M3b — Anthropic adapter and `/v1/messages` | **done** |
 | M4 — Usage events, `TelemetryPort`, Prometheus, cost attribution | **done** |
 | M4b — OTel spans and OTLP export | |
-| M5 — Control plane: Postgres, identity closure, snapshot builder, admin API | next |
-| M5 — Control plane: Postgres, identity closure, snapshot builder, admin API | |
+| M5a — Control plane: domain model, snapshot builder, `gatewayctl` | **done** |
+| M5b — Postgres schema, identity closure table, repository | next |
+| M5c — Admin API, key rotation | |
+| M5d — Snapshot subscriber: worker fetches from the control plane | |
 | M6 — Rate limits and budgets | |
 | M7 — Router: selection/execution split, circuit breakers, health EWMA | |
 | M8 — `GuardrailPort` and policy engine | |

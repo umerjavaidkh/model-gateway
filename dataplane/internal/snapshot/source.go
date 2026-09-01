@@ -29,7 +29,7 @@ func LoadFile(path string) (*core.Snapshot, error) {
 	}
 	// Verify before decoding. A corrupted layer should be reported as corrupted,
 	// not as whatever validation error the corruption happens to produce.
-	if err := wire.VerifyGlobal(msg.GetGlobal()); err != nil {
+	if err := wire.VerifyGlobal(msg.GetGlobalLayer()); err != nil {
 		return nil, err
 	}
 	for _, tenant := range msg.GetTenants() {

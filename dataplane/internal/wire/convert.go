@@ -28,11 +28,11 @@ import (
 // whether it is coherent. That keeps one definition of "a valid snapshot"
 // rather than a second, weaker one here that drifts.
 func DecodeSnapshot(msg *pb.Snapshot) (*core.Snapshot, error) {
-	if msg == nil || msg.GetGlobal() == nil {
+	if msg == nil || msg.GetGlobalLayer() == nil {
 		return nil, core.New(core.CodeInvalidRequest, "snapshot has no global layer")
 	}
 
-	global, err := core.NewGlobalLayer(DecodeGlobal(msg.GetGlobal()))
+	global, err := core.NewGlobalLayer(DecodeGlobal(msg.GetGlobalLayer()))
 	if err != nil {
 		return nil, err
 	}
