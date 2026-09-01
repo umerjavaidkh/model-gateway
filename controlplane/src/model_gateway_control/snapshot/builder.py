@@ -264,7 +264,15 @@ def _encode_principal(p: Principal) -> pb.Principal:
         budgets=[_encode_budget_ref(r) for r in p.budgets],
         default_data_class=p.default_data_class,
         min_trust_tier=_TRUST_TIERS.get(p.min_trust_tier, pb.TRUST_TIER_UNSPECIFIED),
-        max_concurrent=p.max_concurrent,
+        # max_concurrent is also written at its original tag so that a worker
+        # built before RateLimit existed still sees the limit. A field tag is
+        # never reused, and an old reader is a normal state during a rollout.
+        max_concurrent=p.limits.max_concurrent,
+        limits=pb.RateLimit(
+            requests_per_minute=p.limits.requests_per_minute,
+            tokens_per_minute=p.limits.tokens_per_minute,
+            max_concurrent=p.limits.max_concurrent,
+        ),
         deprecated=p.deprecated,
         not_after_unix_ms=_to_unix_ms(p.not_after) if p.not_after else 0,
     )

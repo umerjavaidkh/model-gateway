@@ -5,12 +5,14 @@ import (
 	"errors"
 	"io"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/adapters/echo"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/core"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/gateway"
+	"github.com/umerjavaidkh/model-gateway/dataplane/internal/limits"
 )
 
 // collector captures emitted events so a test can assert on what accounting
@@ -227,5 +229,124 @@ func TestStreamingFailureBeforeTheStreamStartsEmitsOnce(t *testing.T) {
 
 	if got := c.only(t); got.Outcome != core.CodeModelNotFound {
 		t.Fatalf("Outcome = %q", got.Outcome)
+	}
+}
+
+// refusingLimiter refuses everything, so the pipeline's handling of a refusal
+// is exercised without a store or a clock.
+type refusingLimiter struct {
+	released atomic.Int64
+	tokens   atomic.Int64
+}
+
+func (*refusingLimiter) Admit(context.Context, *core.Principal) limits.Decision {
+	return limits.Decision{Reason: core.CodeRateLimited, RetryAfter: 30 * time.Second}
+}
+func (r *refusingLimiter) Release(*core.Principal) { r.released.Add(1) }
+func (r *refusingLimiter) RecordTokens(_ context.Context, _ *core.Principal, n int64) {
+	r.tokens.Add(n)
+}
+
+// countingLimiter admits everything and records what it was told.
+type countingLimiter struct {
+	admitted atomic.Int64
+	released atomic.Int64
+	tokens   atomic.Int64
+}
+
+func (c *countingLimiter) Admit(context.Context, *core.Principal) limits.Decision {
+	c.admitted.Add(1)
+	return limits.Decision{Allowed: true}
+}
+func (c *countingLimiter) Release(*core.Principal) { c.released.Add(1) }
+func (c *countingLimiter) RecordTokens(_ context.Context, _ *core.Principal, n int64) {
+	c.tokens.Add(n)
+}
+
+func TestARateLimitedRequestIsRefusedAndStillEmitsUsage(t *testing.T) {
+	// A refused request consumed a slot worth counting, and a spike in these is
+	// what tells an operator a tenant has outgrown its limit.
+	providers, err := gateway.NewStaticProviders(echo.New())
+	if err != nil {
+		t.Fatalf("NewStaticProviders: %v", err)
+	}
+	collected := &collector{}
+	p, err := gateway.New(providers, gateway.NoCredentials{}, pepper,
+		gateway.WithClock(func() time.Time { return now }),
+		gateway.WithTelemetry(collected),
+		gateway.WithLimiter(&refusingLimiter{}))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_, err = p.Handle(t.Context(), buildSnapshot(t, snapshotOpts{}), request("echo-model", "gw_acme_secret-1"))
+	if !errors.Is(err, core.ErrRateLimited) {
+		t.Fatalf("err = %v, want rate limited", err)
+	}
+	if got := collected.only(t); got.Outcome != core.CodeRateLimited {
+		t.Fatalf("Outcome = %q", got.Outcome)
+	}
+}
+
+func TestASuccessfulRequestReleasesItsSlotAndRecordsTokens(t *testing.T) {
+	// A leaked slot pins a principal until the slack expires; unrecorded
+	// tokens make a token limit permanently unreachable.
+	providers, err := gateway.NewStaticProviders(echo.New())
+	if err != nil {
+		t.Fatalf("NewStaticProviders: %v", err)
+	}
+	limiter := &countingLimiter{}
+	p, err := gateway.New(providers, gateway.NoCredentials{}, pepper,
+		gateway.WithClock(func() time.Time { return now }),
+		gateway.WithLimiter(limiter))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	if _, err := p.Handle(t.Context(), buildSnapshot(t, snapshotOpts{}), request("echo-model", "gw_acme_secret-1")); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+
+	if limiter.admitted.Load() != 1 || limiter.released.Load() != 1 {
+		t.Fatalf("admitted %d, released %d; want one each",
+			limiter.admitted.Load(), limiter.released.Load())
+	}
+	if limiter.tokens.Load() == 0 {
+		t.Fatal("token usage was not recorded, so a token limit could never be reached")
+	}
+}
+
+func TestAStreamReleasesItsSlotOnlyWhenItFinishes(t *testing.T) {
+	// A concurrency limit means nothing for a streamed response if the slot is
+	// returned as soon as the stream starts.
+	providers, err := gateway.NewStaticProviders(echo.New())
+	if err != nil {
+		t.Fatalf("NewStaticProviders: %v", err)
+	}
+	limiter := &countingLimiter{}
+	p, err := gateway.New(providers, gateway.NoCredentials{}, pepper,
+		gateway.WithClock(func() time.Time { return now }),
+		gateway.WithLimiter(limiter))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	result, err := p.HandleStream(t.Context(), buildSnapshot(t, snapshotOpts{}), request("echo-model", "gw_acme_secret-1"))
+	if err != nil {
+		t.Fatalf("HandleStream: %v", err)
+	}
+	if limiter.released.Load() != 0 {
+		t.Fatal("the slot was released while the stream was still open")
+	}
+
+	_ = result.Chunks.Close()
+	result.Finish(core.TokenUsage{Input: 5, Output: 3}, time.Millisecond, nil)
+	result.Finish(core.TokenUsage{Input: 5, Output: 3}, time.Millisecond, nil)
+
+	if got := limiter.released.Load(); got != 1 {
+		t.Fatalf("released %d times, want exactly 1", got)
+	}
+	if got := limiter.tokens.Load(); got != 8 {
+		t.Fatalf("recorded %d tokens, want 8", got)
 	}
 }

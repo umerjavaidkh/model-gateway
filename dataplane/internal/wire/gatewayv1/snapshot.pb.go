@@ -750,6 +750,75 @@ func (x *BudgetRef) GetScope() BudgetScope {
 	return BudgetScope_BUDGET_SCOPE_UNSPECIFIED
 }
 
+// RateLimit is what a principal may consume per window.
+//
+// Zero means unlimited for that dimension, which is the only sane default: a
+// principal created before a limit existed must not suddenly be capped at zero.
+type RateLimit struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Requests admitted per minute.
+	RequestsPerMinute uint32 `protobuf:"varint,1,opt,name=requests_per_minute,json=requestsPerMinute,proto3" json:"requests_per_minute,omitempty"`
+	// Tokens per minute, counted from reported usage, so it necessarily lags by
+	// one request. Approximate by construction and documented as such.
+	TokensPerMinute uint32 `protobuf:"varint,2,opt,name=tokens_per_minute,json=tokensPerMinute,proto3" json:"tokens_per_minute,omitempty"`
+	// Requests in flight at once. Enforced per worker, so the fleet-wide figure
+	// is this multiplied by worker count — stated rather than pretended away.
+	MaxConcurrent uint32 `protobuf:"varint,3,opt,name=max_concurrent,json=maxConcurrent,proto3" json:"max_concurrent,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RateLimit) Reset() {
+	*x = RateLimit{}
+	mi := &file_gateway_v1_snapshot_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RateLimit) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RateLimit) ProtoMessage() {}
+
+func (x *RateLimit) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_v1_snapshot_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RateLimit.ProtoReflect.Descriptor instead.
+func (*RateLimit) Descriptor() ([]byte, []int) {
+	return file_gateway_v1_snapshot_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *RateLimit) GetRequestsPerMinute() uint32 {
+	if x != nil {
+		return x.RequestsPerMinute
+	}
+	return 0
+}
+
+func (x *RateLimit) GetTokensPerMinute() uint32 {
+	if x != nil {
+		return x.TokensPerMinute
+	}
+	return 0
+}
+
+func (x *RateLimit) GetMaxConcurrent() uint32 {
+	if x != nil {
+		return x.MaxConcurrent
+	}
+	return 0
+}
+
 type Principal struct {
 	state  protoimpl.MessageState `protogen:"open.v1"`
 	KeyId  string                 `protobuf:"bytes,1,opt,name=key_id,json=keyId,proto3" json:"key_id,omitempty"`
@@ -772,13 +841,16 @@ type Principal struct {
 	// a warning header, so rotation is a non-event for callers.
 	Deprecated     bool  `protobuf:"varint,14,opt,name=deprecated,proto3" json:"deprecated,omitempty"`
 	NotAfterUnixMs int64 `protobuf:"varint,15,opt,name=not_after_unix_ms,json=notAfterUnixMs,proto3" json:"not_after_unix_ms,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Field 16: max_concurrent above is retained at 13 for compatibility and is
+	// superseded by limits.max_concurrent. A field tag is never reused.
+	Limits        *RateLimit `protobuf:"bytes,16,opt,name=limits,proto3" json:"limits,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Principal) Reset() {
 	*x = Principal{}
-	mi := &file_gateway_v1_snapshot_proto_msgTypes[8]
+	mi := &file_gateway_v1_snapshot_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -790,7 +862,7 @@ func (x *Principal) String() string {
 func (*Principal) ProtoMessage() {}
 
 func (x *Principal) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_snapshot_proto_msgTypes[8]
+	mi := &file_gateway_v1_snapshot_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -803,7 +875,7 @@ func (x *Principal) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Principal.ProtoReflect.Descriptor instead.
 func (*Principal) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_snapshot_proto_rawDescGZIP(), []int{8}
+	return file_gateway_v1_snapshot_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *Principal) GetKeyId() string {
@@ -911,6 +983,13 @@ func (x *Principal) GetNotAfterUnixMs() int64 {
 	return 0
 }
 
+func (x *Principal) GetLimits() *RateLimit {
+	if x != nil {
+		return x.Limits
+	}
+	return nil
+}
+
 // KeyEntry maps a key's lookup value to the principal it resolves to. The
 // lookup is HMAC-SHA256 of the key secret under a pepper the worker holds and
 // the snapshot never carries, so a stolen snapshot yields no usable key.
@@ -924,7 +1003,7 @@ type KeyEntry struct {
 
 func (x *KeyEntry) Reset() {
 	*x = KeyEntry{}
-	mi := &file_gateway_v1_snapshot_proto_msgTypes[9]
+	mi := &file_gateway_v1_snapshot_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -936,7 +1015,7 @@ func (x *KeyEntry) String() string {
 func (*KeyEntry) ProtoMessage() {}
 
 func (x *KeyEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_snapshot_proto_msgTypes[9]
+	mi := &file_gateway_v1_snapshot_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -949,7 +1028,7 @@ func (x *KeyEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KeyEntry.ProtoReflect.Descriptor instead.
 func (*KeyEntry) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_snapshot_proto_rawDescGZIP(), []int{9}
+	return file_gateway_v1_snapshot_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *KeyEntry) GetLookup() []byte {
@@ -985,7 +1064,7 @@ type GlobalLayer struct {
 
 func (x *GlobalLayer) Reset() {
 	*x = GlobalLayer{}
-	mi := &file_gateway_v1_snapshot_proto_msgTypes[10]
+	mi := &file_gateway_v1_snapshot_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -997,7 +1076,7 @@ func (x *GlobalLayer) String() string {
 func (*GlobalLayer) ProtoMessage() {}
 
 func (x *GlobalLayer) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_snapshot_proto_msgTypes[10]
+	mi := &file_gateway_v1_snapshot_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1010,7 +1089,7 @@ func (x *GlobalLayer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GlobalLayer.ProtoReflect.Descriptor instead.
 func (*GlobalLayer) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_snapshot_proto_rawDescGZIP(), []int{10}
+	return file_gateway_v1_snapshot_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *GlobalLayer) GetVersion() *LayerVersion {
@@ -1085,7 +1164,7 @@ type TenantLayer struct {
 
 func (x *TenantLayer) Reset() {
 	*x = TenantLayer{}
-	mi := &file_gateway_v1_snapshot_proto_msgTypes[11]
+	mi := &file_gateway_v1_snapshot_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1097,7 +1176,7 @@ func (x *TenantLayer) String() string {
 func (*TenantLayer) ProtoMessage() {}
 
 func (x *TenantLayer) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_snapshot_proto_msgTypes[11]
+	mi := &file_gateway_v1_snapshot_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1110,7 +1189,7 @@ func (x *TenantLayer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TenantLayer.ProtoReflect.Descriptor instead.
 func (*TenantLayer) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_snapshot_proto_rawDescGZIP(), []int{11}
+	return file_gateway_v1_snapshot_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *TenantLayer) GetTenant() string {
@@ -1200,7 +1279,7 @@ type Snapshot struct {
 
 func (x *Snapshot) Reset() {
 	*x = Snapshot{}
-	mi := &file_gateway_v1_snapshot_proto_msgTypes[12]
+	mi := &file_gateway_v1_snapshot_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1212,7 +1291,7 @@ func (x *Snapshot) String() string {
 func (*Snapshot) ProtoMessage() {}
 
 func (x *Snapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_v1_snapshot_proto_msgTypes[12]
+	mi := &file_gateway_v1_snapshot_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1225,7 +1304,7 @@ func (x *Snapshot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Snapshot.ProtoReflect.Descriptor instead.
 func (*Snapshot) Descriptor() ([]byte, []int) {
-	return file_gateway_v1_snapshot_proto_rawDescGZIP(), []int{12}
+	return file_gateway_v1_snapshot_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *Snapshot) GetGlobalLayer() *GlobalLayer {
@@ -1293,7 +1372,11 @@ const file_gateway_v1_snapshot_proto_rawDesc = "" +
 	"\x15headroom_basis_points\x18\x06 \x01(\rR\x13headroomBasisPoints\"J\n" +
 	"\tBudgetRef\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12-\n" +
-	"\x05scope\x18\x02 \x01(\x0e2\x17.gateway.v1.BudgetScopeR\x05scope\"\xec\x03\n" +
+	"\x05scope\x18\x02 \x01(\x0e2\x17.gateway.v1.BudgetScopeR\x05scope\"\x8e\x01\n" +
+	"\tRateLimit\x12.\n" +
+	"\x13requests_per_minute\x18\x01 \x01(\rR\x11requestsPerMinute\x12*\n" +
+	"\x11tokens_per_minute\x18\x02 \x01(\rR\x0ftokensPerMinute\x12%\n" +
+	"\x0emax_concurrent\x18\x03 \x01(\rR\rmaxConcurrent\"\x9b\x04\n" +
 	"\tPrincipal\x12\x15\n" +
 	"\x06key_id\x18\x01 \x01(\tR\x05keyId\x12\x16\n" +
 	"\x06tenant\x18\x02 \x01(\tR\x06tenant\x12\x10\n" +
@@ -1312,7 +1395,8 @@ const file_gateway_v1_snapshot_proto_rawDesc = "" +
 	"\n" +
 	"deprecated\x18\x0e \x01(\bR\n" +
 	"deprecated\x12)\n" +
-	"\x11not_after_unix_ms\x18\x0f \x01(\x03R\x0enotAfterUnixMs\"9\n" +
+	"\x11not_after_unix_ms\x18\x0f \x01(\x03R\x0enotAfterUnixMs\x12-\n" +
+	"\x06limits\x18\x10 \x01(\v2\x15.gateway.v1.RateLimitR\x06limits\"9\n" +
 	"\bKeyEntry\x12\x16\n" +
 	"\x06lookup\x18\x01 \x01(\fR\x06lookup\x12\x15\n" +
 	"\x06key_id\x18\x02 \x01(\tR\x05keyId\"\xdf\x03\n" +
@@ -1379,7 +1463,7 @@ func file_gateway_v1_snapshot_proto_rawDescGZIP() []byte {
 }
 
 var file_gateway_v1_snapshot_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_gateway_v1_snapshot_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
+var file_gateway_v1_snapshot_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_gateway_v1_snapshot_proto_goTypes = []any{
 	(TrustTier)(0),        // 0: gateway.v1.TrustTier
 	(BudgetScope)(0),      // 1: gateway.v1.BudgetScope
@@ -1392,12 +1476,13 @@ var file_gateway_v1_snapshot_proto_goTypes = []any{
 	(*PluginBinding)(nil), // 8: gateway.v1.PluginBinding
 	(*BudgetState)(nil),   // 9: gateway.v1.BudgetState
 	(*BudgetRef)(nil),     // 10: gateway.v1.BudgetRef
-	(*Principal)(nil),     // 11: gateway.v1.Principal
-	(*KeyEntry)(nil),      // 12: gateway.v1.KeyEntry
-	(*GlobalLayer)(nil),   // 13: gateway.v1.GlobalLayer
-	(*TenantLayer)(nil),   // 14: gateway.v1.TenantLayer
-	(*Snapshot)(nil),      // 15: gateway.v1.Snapshot
-	nil,                   // 16: gateway.v1.GlobalLayer.TenantPrefixesEntry
+	(*RateLimit)(nil),     // 11: gateway.v1.RateLimit
+	(*Principal)(nil),     // 12: gateway.v1.Principal
+	(*KeyEntry)(nil),      // 13: gateway.v1.KeyEntry
+	(*GlobalLayer)(nil),   // 14: gateway.v1.GlobalLayer
+	(*TenantLayer)(nil),   // 15: gateway.v1.TenantLayer
+	(*Snapshot)(nil),      // 16: gateway.v1.Snapshot
+	nil,                   // 17: gateway.v1.GlobalLayer.TenantPrefixesEntry
 }
 var file_gateway_v1_snapshot_proto_depIdxs = []int32{
 	4,  // 0: gateway.v1.Deployment.key:type_name -> gateway.v1.RoutingKey
@@ -1409,25 +1494,26 @@ var file_gateway_v1_snapshot_proto_depIdxs = []int32{
 	1,  // 6: gateway.v1.BudgetRef.scope:type_name -> gateway.v1.BudgetScope
 	10, // 7: gateway.v1.Principal.budgets:type_name -> gateway.v1.BudgetRef
 	0,  // 8: gateway.v1.Principal.min_trust_tier:type_name -> gateway.v1.TrustTier
-	3,  // 9: gateway.v1.GlobalLayer.version:type_name -> gateway.v1.LayerVersion
-	6,  // 10: gateway.v1.GlobalLayer.deployments:type_name -> gateway.v1.Deployment
-	7,  // 11: gateway.v1.GlobalLayer.aliases:type_name -> gateway.v1.ModelAlias
-	16, // 12: gateway.v1.GlobalLayer.tenant_prefixes:type_name -> gateway.v1.GlobalLayer.TenantPrefixesEntry
-	8,  // 13: gateway.v1.GlobalLayer.default_plugins:type_name -> gateway.v1.PluginBinding
-	3,  // 14: gateway.v1.TenantLayer.version:type_name -> gateway.v1.LayerVersion
-	11, // 15: gateway.v1.TenantLayer.principals:type_name -> gateway.v1.Principal
-	12, // 16: gateway.v1.TenantLayer.keys:type_name -> gateway.v1.KeyEntry
-	7,  // 17: gateway.v1.TenantLayer.alias_overrides:type_name -> gateway.v1.ModelAlias
-	9,  // 18: gateway.v1.TenantLayer.budgets:type_name -> gateway.v1.BudgetState
-	8,  // 19: gateway.v1.TenantLayer.plugins:type_name -> gateway.v1.PluginBinding
-	0,  // 20: gateway.v1.TenantLayer.min_trust_tier:type_name -> gateway.v1.TrustTier
-	13, // 21: gateway.v1.Snapshot.global_layer:type_name -> gateway.v1.GlobalLayer
-	14, // 22: gateway.v1.Snapshot.tenants:type_name -> gateway.v1.TenantLayer
-	23, // [23:23] is the sub-list for method output_type
-	23, // [23:23] is the sub-list for method input_type
-	23, // [23:23] is the sub-list for extension type_name
-	23, // [23:23] is the sub-list for extension extendee
-	0,  // [0:23] is the sub-list for field type_name
+	11, // 9: gateway.v1.Principal.limits:type_name -> gateway.v1.RateLimit
+	3,  // 10: gateway.v1.GlobalLayer.version:type_name -> gateway.v1.LayerVersion
+	6,  // 11: gateway.v1.GlobalLayer.deployments:type_name -> gateway.v1.Deployment
+	7,  // 12: gateway.v1.GlobalLayer.aliases:type_name -> gateway.v1.ModelAlias
+	17, // 13: gateway.v1.GlobalLayer.tenant_prefixes:type_name -> gateway.v1.GlobalLayer.TenantPrefixesEntry
+	8,  // 14: gateway.v1.GlobalLayer.default_plugins:type_name -> gateway.v1.PluginBinding
+	3,  // 15: gateway.v1.TenantLayer.version:type_name -> gateway.v1.LayerVersion
+	12, // 16: gateway.v1.TenantLayer.principals:type_name -> gateway.v1.Principal
+	13, // 17: gateway.v1.TenantLayer.keys:type_name -> gateway.v1.KeyEntry
+	7,  // 18: gateway.v1.TenantLayer.alias_overrides:type_name -> gateway.v1.ModelAlias
+	9,  // 19: gateway.v1.TenantLayer.budgets:type_name -> gateway.v1.BudgetState
+	8,  // 20: gateway.v1.TenantLayer.plugins:type_name -> gateway.v1.PluginBinding
+	0,  // 21: gateway.v1.TenantLayer.min_trust_tier:type_name -> gateway.v1.TrustTier
+	14, // 22: gateway.v1.Snapshot.global_layer:type_name -> gateway.v1.GlobalLayer
+	15, // 23: gateway.v1.Snapshot.tenants:type_name -> gateway.v1.TenantLayer
+	24, // [24:24] is the sub-list for method output_type
+	24, // [24:24] is the sub-list for method input_type
+	24, // [24:24] is the sub-list for extension type_name
+	24, // [24:24] is the sub-list for extension extendee
+	0,  // [0:24] is the sub-list for field type_name
 }
 
 func init() { file_gateway_v1_snapshot_proto_init() }
@@ -1441,7 +1527,7 @@ func file_gateway_v1_snapshot_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_gateway_v1_snapshot_proto_rawDesc), len(file_gateway_v1_snapshot_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   14,
+			NumMessages:   15,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

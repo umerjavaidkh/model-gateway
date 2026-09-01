@@ -100,6 +100,32 @@ func (a ModelAllowlist) Permits(name string) bool {
 	return false
 }
 
+// RateLimit is what a principal may consume per window.
+//
+// Zero means unlimited for that dimension. That is the only safe default: a
+// principal that predates a limit must not suddenly be capped at zero, which
+// would turn adding a field into an outage.
+//
+// These are deliberately approximate. Requests per minute is enforced with a
+// local lease in front of a shared window, so a boundary can over-admit
+// slightly; tokens per minute is counted from reported usage and so lags by one
+// request; concurrency is per worker. Budgets are the mechanism for anything
+// that must be exactly right, and they are separate for exactly this reason.
+type RateLimit struct {
+	RequestsPerMinute uint32
+	TokensPerMinute   uint32
+	// MaxConcurrent is enforced per worker. The fleet-wide ceiling is this
+	// multiplied by the worker count, which is stated rather than pretended
+	// away — globally consistent concurrency limiting needs a round trip per
+	// request and is not worth it.
+	MaxConcurrent uint32
+}
+
+// Unlimited reports whether no dimension is capped.
+func (r RateLimit) Unlimited() bool {
+	return r.RequestsPerMinute == 0 && r.TokensPerMinute == 0 && r.MaxConcurrent == 0
+}
+
 // Principal is the precomputed identity record a key resolves to in one hash
 // lookup. Every ancestor, the effective role set, the model allowlist and the
 // whole budget chain are folded in by the control plane, so that admission never
@@ -117,12 +143,12 @@ type Principal struct {
 	User   UserID
 	App    AppID
 
-	Roles         []Role
-	Models        ModelAllowlist
-	Budgets       []BudgetRef
-	DefaultClass  DataClass
-	MinTrustTier  TrustTier
-	MaxConcurrent uint32
+	Roles        []Role
+	Models       ModelAllowlist
+	Budgets      []BudgetRef
+	DefaultClass DataClass
+	MinTrustTier TrustTier
+	Limits       RateLimit
 
 	// Deprecated marks the outgoing generation of a rotated key. It stays valid
 	// until NotAfter, and the transport layer attaches a warning header. Two

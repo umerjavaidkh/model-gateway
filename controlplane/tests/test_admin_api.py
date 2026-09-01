@@ -299,3 +299,69 @@ async def test_rotation_overlap_has_a_deadline(client: AsyncClient) -> None:
 
     expires = datetime.fromtimestamp(old.not_after_unix_ms / 1000, tz=UTC)
     assert expires - NOW == timedelta(days=7)
+
+
+async def test_rate_limits_reach_the_snapshot(client: AsyncClient) -> None:
+    # A limit that the worker never sees is a limit that does not exist.
+    await client.post(
+        "/v1/tenants/acme/keys",
+        json={
+            "key_id": "key-1",
+            "application_id": "app-1",
+            "requests_per_minute": 600,
+            "tokens_per_minute": 90000,
+            "max_concurrent": 32,
+        },
+    )
+
+    raw = (await client.get("/v1/snapshots/current")).content
+    snapshot = pb.Snapshot()
+    snapshot.ParseFromString(raw)
+    principal = snapshot.tenants[0].principals[0]
+
+    assert principal.limits.requests_per_minute == 600
+    assert principal.limits.tokens_per_minute == 90000
+    assert principal.limits.max_concurrent == 32
+    # Also written at the superseded tag, so a worker built before RateLimit
+    # existed still sees the concurrency limit during a rollout.
+    assert principal.max_concurrent == 32
+
+
+async def test_omitted_limits_mean_unlimited(client: AsyncClient) -> None:
+    # Not capped at zero: adding a field must not be an outage for every key
+    # that predates it.
+    await client.post("/v1/tenants/acme/keys", json={"key_id": "key-1", "application_id": "app-1"})
+
+    raw = (await client.get("/v1/snapshots/current")).content
+    snapshot = pb.Snapshot()
+    snapshot.ParseFromString(raw)
+    limits = snapshot.tenants[0].principals[0].limits
+
+    assert limits.requests_per_minute == 0
+    assert limits.tokens_per_minute == 0
+    assert limits.max_concurrent == 0
+
+
+async def test_rotation_carries_limits_to_the_successor(client: AsyncClient) -> None:
+    # A rotated key that silently gets different limits looks like a capacity
+    # problem in the caller.
+    await client.post(
+        "/v1/tenants/acme/keys",
+        json={"key_id": "key-1", "application_id": "app-1", "requests_per_minute": 120},
+    )
+    await client.post("/v1/keys/key-1/rotate", json={"new_key_id": "key-2"})
+
+    raw = (await client.get("/v1/snapshots/current")).content
+    snapshot = pb.Snapshot()
+    snapshot.ParseFromString(raw)
+    by_id = {p.key_id: p for p in snapshot.tenants[0].principals}
+
+    assert by_id["key-2"].limits.requests_per_minute == 120
+
+
+async def test_a_negative_limit_is_rejected(client: AsyncClient) -> None:
+    response = await client.post(
+        "/v1/tenants/acme/keys",
+        json={"key_id": "key-1", "application_id": "app-1", "requests_per_minute": -1},
+    )
+    assert response.status_code == 422

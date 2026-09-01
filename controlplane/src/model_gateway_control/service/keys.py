@@ -24,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from model_gateway_control.db import models
 from model_gateway_control.domain.catalog import TrustTier
-from model_gateway_control.domain.identity import issue_key
+from model_gateway_control.domain.identity import RateLimit, issue_key
 from model_gateway_control.errors import ConflictError, InvalidRequestError, NotFoundError
 
 #: How long a rotated key keeps working. Long enough for a deployment to roll
@@ -77,6 +77,7 @@ class KeyService:
         user_id: str | None = None,
         models_allow_all: bool = False,
         min_trust_tier: TrustTier = TrustTier.EXTERNAL,
+        limits: RateLimit | None = None,
     ) -> NewKey:
         """Mint a key for an application or a user."""
         if (application_id is None) == (user_id is None):
@@ -102,6 +103,9 @@ class KeyService:
                 lookup=minted.lookup,
                 models_allow_all=models_allow_all,
                 min_trust_tier=int(min_trust_tier),
+                requests_per_minute=(limits or RateLimit()).requests_per_minute,
+                tokens_per_minute=(limits or RateLimit()).tokens_per_minute,
+                max_concurrent=(limits or RateLimit()).max_concurrent,
             )
         )
         await self._bump_tenant_version(tenant)
@@ -136,6 +140,11 @@ class KeyService:
             models_allow_all=existing.models_allow_all,
             default_data_class=existing.default_data_class,
             min_trust_tier=existing.min_trust_tier,
+            # Limits carry across, for the same reason roles and budgets do: a
+            # rotated key that silently gets different limits looks like a
+            # capacity problem in the caller.
+            requests_per_minute=existing.requests_per_minute,
+            tokens_per_minute=existing.tokens_per_minute,
             max_concurrent=existing.max_concurrent,
         )
         self._session.add(successor)

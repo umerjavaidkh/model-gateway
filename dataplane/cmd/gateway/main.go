@@ -20,11 +20,13 @@ import (
 
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/adapters/anthropic"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/adapters/echo"
+	"github.com/umerjavaidkh/model-gateway/dataplane/internal/adapters/memkv"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/adapters/openaicompat"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/config"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/core"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/gateway"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/httpapi"
+	"github.com/umerjavaidkh/model-gateway/dataplane/internal/limits"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/secrets"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/snapshot"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/telemetry"
@@ -150,8 +152,22 @@ func run(logger *slog.Logger) error {
 		}
 	}()
 
+	// An in-process store until the Redis adapter lands, which means limits are
+	// enforced per worker: the fleet-wide ceiling is the configured limit times
+	// the worker count. Logged rather than left for an operator to infer from a
+	// graph.
+	limitStore := memkv.New()
+	limiter, err := limits.New(limitStore, limits.WithLogger(logger))
+	if err != nil {
+		return err
+	}
+	logger.Info("rate limits are enforced per worker",
+		slog.String("store", "in-process"),
+		slog.String("note", "fleet-wide limits need a shared store"))
+
 	pipeline, err := gateway.New(providers, credentials, cfg.KeyPepper,
-		gateway.WithTelemetry(emitter))
+		gateway.WithTelemetry(emitter),
+		gateway.WithLimiter(limiter))
 	if err != nil {
 		return err
 	}

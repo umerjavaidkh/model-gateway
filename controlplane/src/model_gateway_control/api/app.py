@@ -24,6 +24,7 @@ from model_gateway_control.api import idempotency
 from model_gateway_control.db.repository import Repository
 from model_gateway_control.db.session import session_factory
 from model_gateway_control.domain.catalog import TrustTier
+from model_gateway_control.domain.identity import RateLimit
 from model_gateway_control.errors import (
     ConflictError,
     ForbiddenError,
@@ -69,6 +70,11 @@ class IssueKeyRequest(BaseModel):
     user_id: str | None = None
     models_allow_all: bool = False
     min_trust_tier: str = "EXTERNAL"
+    # Zero means unlimited for that dimension, matching the domain default, so
+    # omitting them keeps the previous behaviour rather than capping at nothing.
+    requests_per_minute: int = Field(default=0, ge=0)
+    tokens_per_minute: int = Field(default=0, ge=0)
+    max_concurrent: int = Field(default=0, ge=0)
 
 
 class RotateKeyRequest(BaseModel):
@@ -169,6 +175,11 @@ def create_app(settings: AdminSettings) -> FastAPI:
             user_id=body.user_id,
             models_allow_all=body.models_allow_all,
             min_trust_tier=_trust_tier(body.min_trust_tier),
+            limits=RateLimit(
+                requests_per_minute=body.requests_per_minute,
+                tokens_per_minute=body.tokens_per_minute,
+                max_concurrent=body.max_concurrent,
+            ),
         )
 
         if dry_run:

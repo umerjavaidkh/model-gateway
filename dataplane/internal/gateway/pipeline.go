@@ -16,6 +16,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/core"
+	"github.com/umerjavaidkh/model-gateway/dataplane/internal/limits"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/tracing"
 )
 
@@ -72,6 +73,7 @@ type Pipeline struct {
 	providers   ProviderRegistry
 	credentials CredentialResolver
 	telemetry   core.TelemetryPort
+	limiter     RateLimiter
 	// pepper keys the HMAC that turns a presented key secret into the value a
 	// snapshot indexes principals by. It never enters a snapshot, so a stolen
 	// snapshot yields no usable key.
@@ -85,6 +87,27 @@ type Option func(*Pipeline)
 // WithClock replaces the time source, for tests that need a fixed now.
 func WithClock(now func() time.Time) Option {
 	return func(p *Pipeline) { p.now = now }
+}
+
+// RateLimiter admits or refuses a request against the principal's limits.
+//
+// An interface so the pipeline does not depend on how limiting is implemented,
+// and so a test can refuse deterministically without a store or a clock.
+type RateLimiter interface {
+	Admit(ctx context.Context, p *core.Principal) limits.Decision
+	Release(p *core.Principal)
+	RecordTokens(ctx context.Context, p *core.Principal, tokens int64)
+}
+
+// WithLimiter sets the rate limiter. Without one, limits in the snapshot are
+// carried but not enforced — which is the right default for a unit test and
+// the wrong one for a worker, so main always supplies it.
+func WithLimiter(l RateLimiter) Option {
+	return func(p *Pipeline) {
+		if l != nil {
+			p.limiter = l
+		}
+	}
 }
 
 // WithTelemetry sets where usage events go. Without it events are discarded,
@@ -113,6 +136,7 @@ func New(providers ProviderRegistry, credentials CredentialResolver, pepper []by
 		providers:   providers,
 		credentials: credentials,
 		telemetry:   discardTelemetry{},
+		limiter:     unlimited{},
 		pepper:      pepper,
 		now:         time.Now,
 	}
@@ -152,11 +176,14 @@ func (p *Pipeline) Handle(ctx context.Context, snap *core.Snapshot, req *Request
 	result.Principal = principal
 
 	if _, err := stage(ctx, "admit", func() (struct{}, error) {
-		return struct{}{}, p.admit(snap, &principal, req)
+		return struct{}{}, p.admit(ctx, snap, &principal, req)
 	}); err != nil {
 		emit(err)
 		return result, err
 	}
+	// The slot is held for the whole request, which is what makes a
+	// concurrency limit mean anything. Released on every exit path below.
+	defer p.limiter.Release(&principal)
 
 	deployment, err = stage(ctx, "route", func() (core.Deployment, error) {
 		return p.route(snap, &principal, req)
@@ -179,6 +206,10 @@ func (p *Pipeline) Handle(ctx context.Context, snap *core.Snapshot, req *Request
 	result.StatusCode = resp.StatusCode
 	result.Body = resp.Body
 	result.Usage = resp.Usage
+	// Recorded after the call, which is the earliest the count exists. A token
+	// limit therefore takes effect on the *next* request; that lag is inherent
+	// to limiting something that is only measurable afterwards.
+	p.limiter.RecordTokens(ctx, &principal, resp.Usage.Input+resp.Usage.Output)
 	emit(nil)
 	return result, nil
 }
@@ -271,10 +302,13 @@ func (p *Pipeline) HandleStream(ctx context.Context, snap *core.Snapshot, req *R
 	}
 	result.Principal = principal
 
-	if err := p.admit(snap, &principal, req); err != nil {
+	if err := p.admit(ctx, snap, &principal, req); err != nil {
 		emit(err)
 		return result, err
 	}
+	// Held for the life of the stream, which is what makes a concurrency limit
+	// mean anything for a response that takes a minute. Released by Finish.
+	result.releaseLimit = func() { p.limiter.Release(&principal) }
 
 	deployment, err := p.route(snap, &principal, req)
 	if err != nil {
@@ -313,6 +347,7 @@ func (p *Pipeline) HandleStream(ctx context.Context, snap *core.Snapshot, req *R
 	// stream ended and what it consumed. Every early-exit path above has
 	// already emitted, so exactly one event is produced either way.
 	result.finish = func(usage core.TokenUsage, ttfb time.Duration, streamErr error) {
+		p.limiter.RecordTokens(ctx, &principal, usage.Input+usage.Output)
 		r := &Result{
 			Principal:       result.Principal,
 			Deployment:      result.Deployment,
@@ -338,19 +373,27 @@ type StreamResult struct {
 	Deployment core.DeploymentID
 	Route      core.RoutingKey
 
-	deployment core.Deployment
-	finish     func(core.TokenUsage, time.Duration, error)
-	finished   sync.Once
+	deployment   core.Deployment
+	finish       func(core.TokenUsage, time.Duration, error)
+	releaseLimit func()
+	finished     sync.Once
 }
 
 // Finish records the completed stream. It is safe to call more than once and
 // safe to call on a result that never started streaming, so a deferred call in
 // the transport needs no guard.
 func (r *StreamResult) Finish(usage core.TokenUsage, ttfb time.Duration, err error) {
-	if r == nil || r.finish == nil {
+	if r == nil {
 		return
 	}
-	r.finished.Do(func() { r.finish(usage, ttfb, err) })
+	r.finished.Do(func() {
+		if r.releaseLimit != nil {
+			r.releaseLimit()
+		}
+		if r.finish != nil {
+			r.finish(usage, ttfb, err)
+		}
+	})
 }
 
 // authenticate resolves a presented key to a principal in three map probes:
@@ -381,15 +424,39 @@ func (p *Pipeline) authenticate(snap *core.Snapshot, req *Request) (core.Princip
 // admit applies the checks that can be answered from the snapshot alone.
 // Rate limiting needs Redis and arrives with the limiter; budgets are here
 // because their state is folded into the snapshot by the accounting consumer.
-func (p *Pipeline) admit(snap *core.Snapshot, principal *core.Principal, req *Request) error {
+func (p *Pipeline) admit(
+	ctx context.Context, snap *core.Snapshot, principal *core.Principal, req *Request,
+) error {
+	// Snapshot-only checks first: they are map lookups and cannot fail, so
+	// spending a rate-limit permit on a request that a free check would have
+	// refused would let a misconfigured caller exhaust its own limit.
 	if !principal.Models.Permits(req.Meta.Model) {
 		return core.Newf(core.CodeForbidden, "this key may not call %q", req.Meta.Model)
 	}
 	if budget, denied := snap.DeniedBudget(principal); denied {
 		return core.Newf(core.CodeBudgetExhausted, "budget %q is exhausted", budget.ID)
 	}
+
+	if decision := p.limiter.Admit(ctx, principal); !decision.Allowed {
+		return core.Newf(decision.Reason, "rate limit exceeded; retry in %s",
+			decision.RetryAfter.Round(time.Second))
+	}
 	return nil
 }
+
+// unlimited is the default limiter: it enforces nothing.
+type unlimited struct{}
+
+// Admit permits everything.
+func (unlimited) Admit(context.Context, *core.Principal) limits.Decision {
+	return limits.Decision{Allowed: true}
+}
+
+// Release does nothing; nothing was acquired.
+func (unlimited) Release(*core.Principal) {}
+
+// RecordTokens discards the count.
+func (unlimited) RecordTokens(context.Context, *core.Principal, int64) {}
 
 // route resolves the requested model to a deployment that may serve it.
 //

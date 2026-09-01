@@ -32,6 +32,7 @@ dataplane/          Go. The request path: auth -> admit -> route -> adapt.
   internal/secrets/   Credential resolution. Secrets never enter a snapshot.
   internal/telemetry/ Usage and audit events, off the request path.
   internal/tracing/   OpenTelemetry setup. Adopted, not wrapped.
+  internal/limits/    Rate limiting: a local lease in front of a shared window.
   cmd/gateway/        The worker binary.
   cmd/snapshotgen/    Writes a demo snapshot, so the repo runs without a control plane.
   internal/contracts/ Per-port contract suites; also the plugin admission gate.
@@ -136,7 +137,9 @@ decided and why.
 | M5b — Postgres schema, migrations, repository | **done** |
 | M5c — Admin API, key rotation | **done** |
 | M5d — Snapshot subscriber: worker fetches from the control plane | **done** |
-| M6 — Rate limits and budgets | next |
+| M6a — Rate limits: local lease bucket, enforced at admission | **done** |
+| M6b — Redis `KVStore`, making limits fleet-wide | next |
+| M6c — Budgets: accounting consumer folds spend into snapshots | |
 | M7 — Router: selection/execution split, circuit breakers, health EWMA | |
 | M8 — `GuardrailPort` and policy engine | |
 | M9 — PII chain | |

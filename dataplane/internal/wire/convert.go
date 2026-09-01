@@ -281,18 +281,18 @@ func encodeBudget(b core.BudgetState) *pb.BudgetState {
 
 func decodePrincipal(p *pb.Principal) core.Principal {
 	out := core.Principal{
-		KeyID:         core.KeyID(p.GetKeyId()),
-		Tenant:        core.TenantID(p.GetTenant()),
-		Org:           core.OrgID(p.GetOrg()),
-		Team:          core.TeamID(p.GetTeam()),
-		User:          core.UserID(p.GetUser()),
-		App:           core.AppID(p.GetApp()),
-		Models:        core.ModelAllowlist{AllowAll: p.GetModelsAllowAll(), Names: p.GetModels()},
-		DefaultClass:  core.DataClass(p.GetDefaultDataClass()),
-		MinTrustTier:  decodeTrustTier(p.GetMinTrustTier()),
-		MaxConcurrent: p.GetMaxConcurrent(),
-		Deprecated:    p.GetDeprecated(),
-		NotAfter:      fromUnixMillis(p.GetNotAfterUnixMs()),
+		KeyID:        core.KeyID(p.GetKeyId()),
+		Tenant:       core.TenantID(p.GetTenant()),
+		Org:          core.OrgID(p.GetOrg()),
+		Team:         core.TeamID(p.GetTeam()),
+		User:         core.UserID(p.GetUser()),
+		App:          core.AppID(p.GetApp()),
+		Models:       core.ModelAllowlist{AllowAll: p.GetModelsAllowAll(), Names: p.GetModels()},
+		DefaultClass: core.DataClass(p.GetDefaultDataClass()),
+		MinTrustTier: decodeTrustTier(p.GetMinTrustTier()),
+		Limits:       decodeLimits(p),
+		Deprecated:   p.GetDeprecated(),
+		NotAfter:     fromUnixMillis(p.GetNotAfterUnixMs()),
 	}
 	for _, r := range p.GetRoles() {
 		out.Roles = append(out.Roles, core.Role(r))
@@ -303,6 +303,24 @@ func decodePrincipal(p *pb.Principal) core.Principal {
 		})
 	}
 	return out
+}
+
+// decodeLimits reads the limits, falling back to the superseded
+// max_concurrent field.
+//
+// A snapshot compiled before RateLimit existed still carries max_concurrent at
+// its old tag. Reading it keeps an older control plane working against a newer
+// worker, which is the situation a rolling upgrade is made of.
+func decodeLimits(p *pb.Principal) core.RateLimit {
+	limits := core.RateLimit{MaxConcurrent: p.GetMaxConcurrent()}
+	if l := p.GetLimits(); l != nil {
+		limits.RequestsPerMinute = l.GetRequestsPerMinute()
+		limits.TokensPerMinute = l.GetTokensPerMinute()
+		if l.GetMaxConcurrent() > 0 {
+			limits.MaxConcurrent = l.GetMaxConcurrent()
+		}
+	}
+	return limits
 }
 
 func encodePrincipal(p core.Principal) *pb.Principal {
@@ -317,9 +335,14 @@ func encodePrincipal(p core.Principal) *pb.Principal {
 		Models:           p.Models.Names,
 		DefaultDataClass: string(p.DefaultClass),
 		MinTrustTier:     encodeTrustTier(p.MinTrustTier),
-		MaxConcurrent:    p.MaxConcurrent,
-		Deprecated:       p.Deprecated,
-		NotAfterUnixMs:   toUnixMillis(p.NotAfter),
+		MaxConcurrent:    p.Limits.MaxConcurrent,
+		Limits: &pb.RateLimit{
+			RequestsPerMinute: p.Limits.RequestsPerMinute,
+			TokensPerMinute:   p.Limits.TokensPerMinute,
+			MaxConcurrent:     p.Limits.MaxConcurrent,
+		},
+		Deprecated:     p.Deprecated,
+		NotAfterUnixMs: toUnixMillis(p.NotAfter),
 	}
 	for _, r := range p.Roles {
 		msg.Roles = append(msg.Roles, string(r))

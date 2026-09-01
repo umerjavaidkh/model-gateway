@@ -53,14 +53,14 @@ func fullTenantSpec() core.TenantSpec {
 		Principals: []core.Principal{{
 			KeyID: "key-1", Tenant: "acme", Org: "acme-org", Team: "platform",
 			User: "u-1", App: "app-1",
-			Roles:         []core.Role{"admin", "billing"},
-			Models:        core.ModelAllowlist{Names: []string{"fast", "cheap"}},
-			Budgets:       []core.BudgetRef{{ID: "monthly", Scope: core.BudgetScopeOrg}},
-			DefaultClass:  core.DataClassConfidential,
-			MinTrustTier:  core.TrustPrivateCloud,
-			MaxConcurrent: 32,
-			Deprecated:    true,
-			NotAfter:      builtAt.Add(24 * time.Hour),
+			Roles:        []core.Role{"admin", "billing"},
+			Models:       core.ModelAllowlist{Names: []string{"fast", "cheap"}},
+			Budgets:      []core.BudgetRef{{ID: "monthly", Scope: core.BudgetScopeOrg}},
+			DefaultClass: core.DataClassConfidential,
+			MinTrustTier: core.TrustPrivateCloud,
+			Limits:       core.RateLimit{RequestsPerMinute: 600, TokensPerMinute: 90_000, MaxConcurrent: 32},
+			Deprecated:   true,
+			NotAfter:     builtAt.Add(24 * time.Hour),
 		}},
 		Keys: map[core.KeyLookup]core.KeyID{lookup: "key-1"},
 		AliasOverrides: []core.ModelAlias{
@@ -91,6 +91,25 @@ func TestTenantLayerSurvivesARoundTrip(t *testing.T) {
 
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Fatalf("tenant spec changed across the wire (-want +got):\n%s", diff)
+	}
+}
+
+func TestASnapshotWithoutRateLimitsStillDecodes(t *testing.T) {
+	// A snapshot compiled before RateLimit existed carries max_concurrent at
+	// its old tag and nothing else. Reading it keeps an older control plane
+	// working against a newer worker, which is what a rolling upgrade is made
+	// of — and zero elsewhere means unlimited, not denied.
+	msg := wire.EncodeTenant(fullTenantSpec())
+	msg.Principals[0].Limits = nil
+	msg.Principals[0].MaxConcurrent = 8
+
+	got := wire.DecodeTenant(msg)
+	limits := got.Principals[0].Limits
+	if limits.MaxConcurrent != 8 {
+		t.Fatalf("MaxConcurrent = %d, want the superseded field honoured", limits.MaxConcurrent)
+	}
+	if limits.RequestsPerMinute != 0 || limits.TokensPerMinute != 0 {
+		t.Fatalf("absent limits must read as unlimited, got %+v", limits)
 	}
 }
 

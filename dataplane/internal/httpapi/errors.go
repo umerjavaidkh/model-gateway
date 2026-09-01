@@ -5,6 +5,9 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/core"
 )
@@ -77,6 +80,15 @@ func writeError(w http.ResponseWriter, logger *slog.Logger, requestID string, er
 		message = "internal error"
 	}
 
+	// A 429 without a retry hint makes a well-behaved client guess, and a
+	// guessing client retries too fast — which is the traffic the limit was
+	// protecting against.
+	if status == http.StatusTooManyRequests {
+		if after := retryAfterFrom(err); after > 0 {
+			w.Header().Set("Retry-After", strconv.Itoa(int(after.Seconds())))
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(errorBody{Error: errorDetail{
@@ -85,6 +97,27 @@ func writeError(w http.ResponseWriter, logger *slog.Logger, requestID string, er
 		Code:      string(code),
 		RequestID: requestID,
 	}})
+}
+
+// retryAfterFrom extracts the retry hint a limiter put in the message.
+//
+// The duration travels in the message rather than in a new error field,
+// because a field on core.Error would exist for one code and be nil for every
+// other — and core would then know what a rate limit is.
+func retryAfterFrom(err error) time.Duration {
+	var gwErr *core.Error
+	if !errors.As(err, &gwErr) {
+		return 0
+	}
+	_, after, found := strings.Cut(gwErr.Message, "retry in ")
+	if !found {
+		return 0
+	}
+	parsed, parseErr := time.ParseDuration(after)
+	if parseErr != nil {
+		return 0
+	}
+	return parsed
 }
 
 func typeForStatus(status int) string {
