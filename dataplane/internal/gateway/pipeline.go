@@ -75,6 +75,7 @@ type Pipeline struct {
 	telemetry   core.TelemetryPort
 	limiter     RateLimiter
 	router      *router.Router
+	region      string
 	// pepper keys the HMAC that turns a presented key secret into the value a
 	// snapshot indexes principals by. It never enters a snapshot, so a stolen
 	// snapshot yields no usable key.
@@ -98,6 +99,12 @@ type RateLimiter interface {
 	Admit(ctx context.Context, p *core.Principal) limits.Decision
 	Release(p *core.Principal)
 	RecordTokens(ctx context.Context, p *core.Principal, tokens int64)
+}
+
+// WithRegion tells selection where this worker runs, so a deployment in the
+// same region is preferred.
+func WithRegion(region string) Option {
+	return func(p *Pipeline) { p.region = region }
 }
 
 // WithRouter replaces the router. Without one the pipeline builds its own with
@@ -518,6 +525,13 @@ func (p *Pipeline) route(
 		Model:        req.Meta.Model,
 		Endpoint:     req.Meta.Endpoint,
 		MinTrustTier: minTier,
+		Region:       p.region,
+		// Balanced until an objective can be expressed per tenant or per
+		// request. Most traffic wants a working answer at a sensible price,
+		// and a default that has to be overridden to be reasonable is the
+		// wrong default.
+		Objective:       router.ObjectiveBalanced,
+		ReferenceTokens: int64(req.Meta.PayloadBytes / 4),
 	})
 }
 

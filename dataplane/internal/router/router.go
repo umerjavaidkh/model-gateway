@@ -47,11 +47,34 @@ type ProviderFor interface {
 	Provider(name string) (core.ProviderPort, bool)
 }
 
+// Objective is what selection optimises for when candidates are otherwise
+// comparable.
+//
+// It never overrides health. A cheaper deployment that is failing is not a
+// better choice than an expensive one that works, so cost and locality break
+// ties among healthy candidates rather than competing with health.
+type Objective uint8
+
+const (
+	// ObjectiveBalanced weighs health, cost and locality together. The default,
+	// because most traffic wants a working answer at a sensible price.
+	ObjectiveBalanced Objective = iota
+	// ObjectiveLatency prefers whatever is fastest and nearest, ignoring price.
+	ObjectiveLatency
+	// ObjectiveCost prefers the cheapest healthy option, accepting more
+	// latency.
+	ObjectiveCost
+)
+
 // Candidate is a deployment eligible to serve a request, with the score that
 // ordered it.
 type Candidate struct {
 	Deployment core.Deployment
 	Score      float64
+	// Health is the deployment's score before cost and locality were applied,
+	// kept so that "why was this chosen" can distinguish a healthy expensive
+	// deployment from an unhealthy cheap one.
+	Health float64
 }
 
 // Router selects and executes. Safe for concurrent use.
@@ -66,9 +89,18 @@ type Router struct {
 	mu       sync.Mutex
 	breakers map[core.DeploymentID]*Breaker
 	health   map[core.DeploymentID]*Health
+	// observer is told which deployments served real traffic, so the prober
+	// can skip them. An interface rather than a *Prober so the router does not
+	// depend on the thing that depends on it.
+	observer TrafficObserver
 
 	breakerOpts []BreakerOption
 	healthOpts  []HealthOption
+}
+
+// TrafficObserver is told when a deployment served real traffic.
+type TrafficObserver interface {
+	Saw(core.DeploymentID)
 }
 
 // Option configures a Router.
@@ -152,6 +184,19 @@ type SelectionInput struct {
 	// for.
 	MinTrustTier core.TrustTier
 	Required     []core.Capability
+
+	// Objective is what to optimise for among healthy candidates.
+	Objective Objective
+	// Region is where this worker runs. A deployment in the same region is
+	// preferred, which is the plan's local-first behaviour expressed as a
+	// weight rather than as a separate tier: a hard local-only rule would make
+	// a regional outage a total outage.
+	Region string
+	// ReferenceTokens is the request size used to compare prices. Cost per
+	// thousand tokens is not comparable across deployments without assuming a
+	// request shape, and assuming one is more honest than pretending the
+	// comparison is exact.
+	ReferenceTokens int64
 }
 
 // Select returns the deployments that may serve a request, best first.
@@ -184,9 +229,11 @@ func (r *Router) Select(in SelectionInput) ([]Candidate, error) {
 			if !ok || !slices.Contains(provider.Endpoints(), in.Endpoint) {
 				continue
 			}
+			health := r.healthFor(deployment.ID).Score()
 			candidates = append(candidates, Candidate{
 				Deployment: deployment,
-				Score:      r.healthFor(deployment.ID).Score(),
+				Health:     health,
+				Score:      health,
 			})
 		}
 	}
@@ -194,6 +241,8 @@ func (r *Router) Select(in SelectionInput) ([]Candidate, error) {
 	if len(candidates) == 0 {
 		return nil, selectionError(in.Model, in.MinTrustTier, sawAny, sawServing, sawTier)
 	}
+
+	applyObjective(candidates, in)
 
 	// Best first, and stable so that equal scores keep catalog order rather
 	// than shuffling between requests — which would make routing decisions
@@ -209,6 +258,77 @@ func (r *Router) Select(in SelectionInput) ([]Candidate, error) {
 		}
 	})
 	return candidates, nil
+}
+
+// applyObjective folds cost and locality into each candidate's score.
+//
+// Health is the floor of the calculation, not one term among equals: the
+// adjustments can only move a candidate within the band its health already put
+// it in. Letting price outweigh health would send traffic to whichever
+// deployment was cheapest to fail.
+func applyObjective(candidates []Candidate, in SelectionInput) {
+	cheapest, dearest := priceRange(candidates, in.ReferenceTokens)
+
+	for i := range candidates {
+		deployment := candidates[i].Deployment
+
+		// 1 for the cheapest, 0 for the dearest, 1 when they all cost the same.
+		priceScore := 1.0
+		if dearest > cheapest {
+			price := float64(deployment.Cost.For(referenceUsage(in.ReferenceTokens)))
+			priceScore = 1 - (price-float64(cheapest))/float64(dearest-cheapest)
+		}
+
+		// Locality is binary rather than a distance: the gateway knows which
+		// region it is in, not how far anywhere else is, and inventing a
+		// distance would be a number nobody could justify.
+		localityScore := 0.0
+		if in.Region == "" || deployment.Region == in.Region {
+			localityScore = 1
+		}
+
+		var costWeight, localityWeight float64
+		switch in.Objective {
+		case ObjectiveCost:
+			costWeight, localityWeight = 0.30, 0.05
+		case ObjectiveLatency:
+			costWeight, localityWeight = 0.0, 0.20
+		case ObjectiveBalanced:
+			costWeight, localityWeight = 0.15, 0.10
+		}
+
+		// Scaled by health so an unhealthy deployment cannot be promoted by
+		// being cheap or nearby.
+		health := candidates[i].Health
+		candidates[i].Score = health * (1 + costWeight*priceScore + localityWeight*localityScore)
+	}
+}
+
+func priceRange(candidates []Candidate, tokens int64) (cheapest, dearest core.MicroUSD) {
+	usage := referenceUsage(tokens)
+	for i, candidate := range candidates {
+		price := candidate.Deployment.Cost.For(usage)
+		if i == 0 || price < cheapest {
+			cheapest = price
+		}
+		if i == 0 || price > dearest {
+			dearest = price
+		}
+	}
+	return cheapest, dearest
+}
+
+// referenceUsage is the request shape prices are compared at.
+//
+// A fixed shape rather than the real request, because selection happens before
+// the body is parsed and the comparison only needs to be consistent, not
+// accurate. Output is weighted lower than input, matching how most traffic
+// actually splits.
+func referenceUsage(tokens int64) core.TokenUsage {
+	if tokens <= 0 {
+		tokens = 1000
+	}
+	return core.TokenUsage{Input: tokens, Output: tokens / 4}
 }
 
 // selectionError distinguishes why nothing was eligible. The four cases mean
@@ -295,6 +415,10 @@ func (r *Router) Execute(
 			lastErr = core.Newf(core.CodeInternal,
 				"provider %q vanished between selection and execution", candidate.Deployment.Provider)
 			continue
+		}
+
+		if observer := r.trafficObserver(); observer != nil {
+			observer.Saw(candidate.Deployment.ID)
 		}
 
 		attemptCtx, cancel := context.WithTimeout(ctx, remaining)
@@ -425,6 +549,15 @@ func (r *Router) Stats() []DeploymentHealth {
 	return out
 }
 
+// observe registers something to be told which deployments served traffic.
+// Unexported: the prober calls it during its own construction, which is the
+// only correct time to wire a cycle.
+func (r *Router) observe(o TrafficObserver) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.observer = o
+}
+
 func (r *Router) breakerFor(id core.DeploymentID) *Breaker {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -435,6 +568,12 @@ func (r *Router) breakerFor(id core.DeploymentID) *Breaker {
 	b := NewBreaker(r.breakerOpts...)
 	r.breakers[id] = b
 	return b
+}
+
+func (r *Router) trafficObserver() TrafficObserver {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.observer
 }
 
 func (r *Router) healthFor(id core.DeploymentID) *Health {

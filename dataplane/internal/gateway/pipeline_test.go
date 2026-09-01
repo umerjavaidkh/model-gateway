@@ -356,6 +356,8 @@ type providerOnly struct {
 func (p providerOnly) Name() string               { return p.name }
 func (p providerOnly) Endpoints() []core.Endpoint { return []core.Endpoint{p.endpoint} }
 
+func (providerOnly) Probe(context.Context, core.Deployment, core.Credential) error { return nil }
+
 func (providerOnly) Invoke(context.Context, *core.ProviderCall) (*core.ProviderResponse, error) {
 	return &core.ProviderResponse{StatusCode: 200, Body: []byte(`{}`)}, nil
 }

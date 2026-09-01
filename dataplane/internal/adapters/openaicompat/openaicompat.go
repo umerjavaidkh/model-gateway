@@ -78,6 +78,43 @@ func (*Provider) Endpoints() []core.Endpoint {
 	return []core.Endpoint{core.EndpointChatCompletions}
 }
 
+// Probe checks the deployment is reachable and the credential is accepted.
+//
+// It lists models rather than running a completion. A probe that generated
+// tokens would bill the tenant for the gateway's own monitoring, once per
+// interval, per deployment — and the thing being checked is reachability and
+// authentication, both of which a list answers.
+//
+// An endpoint that does not implement the listing is treated as healthy rather
+// than as failing. Some compatible servers omit it, and marking every one of
+// them permanently unhealthy would be worse than not probing at all.
+func (p *Provider) Probe(ctx context.Context, d core.Deployment, cred core.Credential) error {
+	url := strings.TrimSuffix(d.Endpoint, "/") + "/models"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return core.Wrap(core.CodeInvalidRequest, err, "building the probe request")
+	}
+	if len(cred.Secret) > 0 {
+		req.Header.Set("Authorization", "Bearer "+string(cred.Secret))
+	}
+
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return core.WrapRetryable(core.CodeUnavailable, err, "probing the provider")
+	}
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxErrorBodyBytes))
+
+	switch {
+	case resp.StatusCode < http.StatusBadRequest:
+		return nil
+	case resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed:
+		return nil
+	default:
+		return core.Newf(core.CodeUnavailable, "probe returned %d", resp.StatusCode)
+	}
+}
+
 // Invoke makes a non-streaming call.
 func (p *Provider) Invoke(ctx context.Context, call *core.ProviderCall) (*core.ProviderResponse, error) {
 	resp, err := p.send(ctx, call, false)

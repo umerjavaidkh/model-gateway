@@ -389,6 +389,17 @@ func (s *Snapshot) TenantIDs() []TenantID {
 	return out
 }
 
+// DeploymentIDs returns every deployment in the catalog, in unspecified order.
+// It is for control-path work — probing, metrics — and is not on the request
+// path.
+func (s *Snapshot) DeploymentIDs() []DeploymentID {
+	out := make([]DeploymentID, 0, len(s.global.deployments))
+	for id := range s.global.deployments {
+		out = append(out, id)
+	}
+	return out
+}
+
 // PolicyBundleRef reports the compiled policy bundle this snapshot was built
 // against.
 func (s *Snapshot) PolicyBundleRef() string { return s.global.policyBundleRef }
