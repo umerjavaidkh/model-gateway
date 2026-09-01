@@ -132,6 +132,18 @@ type ProviderPort interface {
 	// adapter that serves different surfaces per deployment would be the signal
 	// to move it, and nothing here prevents that.
 	Endpoints() []Endpoint
+	// Probe reports whether a deployment is reachable and willing to serve.
+	//
+	// It exists because passive health can only measure deployments that
+	// receive traffic, and the ones that do not are exactly the ones an
+	// operator is unsure about: a newly added deployment, a failover tier that
+	// has never been used, one whose breaker is open. Without this they are
+	// either always tried, or never — and both are wrong.
+	//
+	// It must be cheap and must not consume tokens. A probe that ran a
+	// completion would bill the tenant for the gateway's own monitoring, on
+	// every interval, for every deployment.
+	Probe(ctx context.Context, deployment Deployment, credential Credential) error
 	Invoke(ctx context.Context, call *ProviderCall) (*ProviderResponse, error)
 	Stream(ctx context.Context, call *ProviderCall) (ChunkStream, error)
 }

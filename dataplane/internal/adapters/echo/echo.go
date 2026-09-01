@@ -34,6 +34,11 @@ func (*Provider) Endpoints() []core.Endpoint {
 	return []core.Endpoint{core.EndpointChatCompletions, core.EndpointMessages, core.EndpointEmbeddings}
 }
 
+// Probe always succeeds: there is nothing to reach.
+func (*Provider) Probe(ctx context.Context, _ core.Deployment, _ core.Credential) error {
+	return ctx.Err()
+}
+
 // Invoke returns the request body unchanged.
 func (*Provider) Invoke(ctx context.Context, call *core.ProviderCall) (*core.ProviderResponse, error) {
 	if err := ctx.Err(); err != nil {

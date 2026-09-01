@@ -161,8 +161,8 @@ decided and why.
 | M6b — Redis `KVStore`, making limits fleet-wide | **done** |
 | M6c — Budgets: accounting consumer folds spend into snapshots | **done** |
 | M7a — Router: selection/execution split, circuit breakers, passive health | **done** |
-| M7b — Active health probing, cost and locality objectives | next |
-| M8 — `GuardrailPort` and policy engine | |
+| M7b — Active health probing, cost and locality objectives | **done** |
+| M8 — `GuardrailPort` and policy engine | next |
 | M9 — PII chain | |
 | M10 — Component registry | |
 | M11+ — Fine-tuning | |

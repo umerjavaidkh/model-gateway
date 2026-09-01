@@ -49,6 +49,26 @@ func RunProviderSuite(t *testing.T, newPort ProviderFactory, sample SampleCall) 
 		}
 	})
 
+	t.Run("probe does not consume tokens", func(t *testing.T) {
+		// A probe that ran a completion would bill the tenant for the
+		// gateway's own monitoring, once per interval, per deployment. There
+		// is no way to assert "no tokens" generically, so what is asserted is
+		// that it answers at all and answers quickly — a completion could not.
+		port := newPort(t)
+		call := sample(t)
+
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		defer cancel()
+
+		done := make(chan error, 1)
+		go func() { done <- port.Probe(ctx, call.Deployment, call.Credential) }()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatal("Probe did not answer; a health check must be cheap")
+		}
+	})
+
 	t.Run("invoke returns a response", func(t *testing.T) {
 		port := newPort(t)
 		resp, err := port.Invoke(t.Context(), sample(t))

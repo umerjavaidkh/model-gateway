@@ -57,6 +57,12 @@ type Config struct {
 	// recorded. A caller's sampling decision is always honoured regardless.
 	TraceSampleRatio float64
 
+	// Region is where this worker runs. A deployment in the same region is
+	// preferred during selection, which is local-first expressed as a weight
+	// rather than a hard rule — the hard version makes a regional outage a
+	// total outage.
+	Region string
+
 	// RedisURL makes rate limits fleet-wide. Without it limits are enforced
 	// per worker, which is a legitimate deployment rather than a failure, so
 	// this stays optional and the worker says which mode it is in.
@@ -88,6 +94,7 @@ func Load(getenv Getenv) (Config, error) {
 		SnapshotInterval:  DefaultSnapshotInterval,
 		OTLPEndpoint:      getenv("GATEWAY_OTLP_ENDPOINT"),
 		RedisURL:          getenv("GATEWAY_REDIS_URL"),
+		Region:            getenv("GATEWAY_REGION"),
 		OTLPInsecure:      getenv("GATEWAY_OTLP_INSECURE") == "true",
 		TraceSampleRatio:  DefaultTraceSampleRatio,
 		ReadTimeout:       DefaultReadTimeout,

@@ -195,10 +195,23 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
+	// Probing covers what passive health cannot: a deployment nobody is
+	// sending traffic to is exactly the one an operator is unsure about.
+	prober, err := router.NewProber(rt,
+		func() *core.Snapshot { return holder.Current() },
+		credentials.Resolve,
+		router.WithProberLogger(logger))
+	if err != nil {
+		return err
+	}
+	prober.Start(ctx)
+	defer prober.Stop()
+
 	pipeline, err := gateway.New(providers, credentials, cfg.KeyPepper,
 		gateway.WithTelemetry(emitter),
 		gateway.WithLimiter(limiter),
-		gateway.WithRouter(rt))
+		gateway.WithRouter(rt),
+		gateway.WithRegion(cfg.Region))
 	if err != nil {
 		return err
 	}

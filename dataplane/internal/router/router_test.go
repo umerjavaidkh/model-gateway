@@ -23,6 +23,8 @@ func (p stubProvider) Name() string { return p.name }
 func (stubProvider) Endpoints() []core.Endpoint {
 	return []core.Endpoint{core.EndpointChatCompletions, core.EndpointMessages}
 }
+func (stubProvider) Probe(context.Context, core.Deployment, core.Credential) error { return nil }
+
 func (stubProvider) Invoke(context.Context, *core.ProviderCall) (*core.ProviderResponse, error) {
 	return &core.ProviderResponse{StatusCode: 200}, nil
 }
@@ -426,5 +428,110 @@ func TestARequestThatSucceedsFirstTimeMakesOneCall(t *testing.T) {
 func TestNewRejectsAMissingRegistry(t *testing.T) {
 	if _, err := router.New(nil); err == nil {
 		t.Fatal("a router with no registry could never resolve a provider")
+	}
+}
+
+// --- objectives ---------------------------------------------------------------
+
+func priced(id string, in, out core.MicroUSD, region string) core.Deployment {
+	d := deployment(id, core.TrustInternal, "alpha")
+	d.Cost = core.Cost{InputPer1K: in, OutputPer1K: out}
+	d.Region = region
+	return d
+}
+
+func selectWith(t *testing.T, r *router.Router, snap *core.Snapshot, in router.SelectionInput) []router.Candidate {
+	t.Helper()
+	in.Snapshot, in.Tenant, in.Model = snap, "acme", "m"
+	in.Endpoint = core.EndpointChatCompletions
+	in.MinTrustTier = core.TrustExternal
+
+	candidates, err := r.Select(in)
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	return candidates
+}
+
+func TestTheCostObjectivePrefersTheCheaperDeployment(t *testing.T) {
+	snap := snapshotWith(t,
+		priced("dear", 3000, 15000, "eu"),
+		priced("cheap", 150, 600, "eu"),
+	)
+	r := newRouter(t, defaultRegistry())
+
+	got := selectWith(t, r, snap, router.SelectionInput{Objective: router.ObjectiveCost})
+	if got[0].Deployment.ID != "cheap" {
+		t.Fatalf("chose %q, want the cheaper deployment", got[0].Deployment.ID)
+	}
+}
+
+func TestLocalityIsPreferredWhenPricesAreEqual(t *testing.T) {
+	// Local-first as a weight rather than a tier: a hard local-only rule makes
+	// a regional outage a total outage.
+	snap := snapshotWith(t,
+		priced("far", 1000, 1000, "us"),
+		priced("near", 1000, 1000, "eu"),
+	)
+	r := newRouter(t, defaultRegistry())
+
+	got := selectWith(t, r, snap, router.SelectionInput{
+		Objective: router.ObjectiveBalanced, Region: "eu",
+	})
+	if got[0].Deployment.ID != "near" {
+		t.Fatalf("chose %q, want the local deployment", got[0].Deployment.ID)
+	}
+}
+
+func TestCostNeverOutranksHealth(t *testing.T) {
+	// A cheaper deployment that is failing is not a better choice than an
+	// expensive one that works. Letting price outweigh health would send
+	// traffic to whichever deployment was cheapest to fail.
+	snap := snapshotWith(t,
+		priced("cheap-broken", 10, 10, "eu"),
+		priced("dear-healthy", 100000, 100000, "eu"),
+	)
+	r := newRouter(t, defaultRegistry(), router.WithRetryBackoff(0), router.WithMaxAttempts(1))
+
+	broken := []router.Candidate{{Deployment: priced("cheap-broken", 10, 10, "eu")}}
+	for range 10 {
+		_, _ = r.Execute(t.Context(), broken, time.Time{},
+			failingCall(core.New(core.CodeUpstreamError, "down").AsRetryable()))
+	}
+
+	got := selectWith(t, r, snap, router.SelectionInput{Objective: router.ObjectiveCost})
+	if got[0].Deployment.ID != "dear-healthy" {
+		t.Fatalf("chose %q; price outranked health", got[0].Deployment.ID)
+	}
+}
+
+func TestEqualPricesDoNotDistortTheOrdering(t *testing.T) {
+	// With one price there is no cheaper option, and a naive normalisation
+	// would divide by zero or silently score everything zero.
+	snap := snapshotWith(t, priced("a", 500, 500, "eu"), priced("b", 500, 500, "eu"))
+	r := newRouter(t, defaultRegistry())
+
+	got := selectWith(t, r, snap, router.SelectionInput{Objective: router.ObjectiveCost})
+	if len(got) != 2 {
+		t.Fatalf("got %d candidates, want both", len(got))
+	}
+	if got[0].Score <= 0 || got[1].Score <= 0 {
+		t.Fatalf("scores collapsed to zero: %v", got)
+	}
+}
+
+func TestHealthIsReportedAlongsideTheAdjustedScore(t *testing.T) {
+	// "Why was this chosen" needs to distinguish a healthy expensive
+	// deployment from an unhealthy cheap one.
+	snap := snapshotWith(t, priced("a", 500, 500, "eu"))
+	r := newRouter(t, defaultRegistry())
+
+	got := selectWith(t, r, snap, router.SelectionInput{Objective: router.ObjectiveCost})
+	if got[0].Health != 1 {
+		t.Fatalf("Health = %v, want the unadjusted score", got[0].Health)
+	}
+	if got[0].Score <= got[0].Health {
+		t.Fatalf("Score %v did not reflect the objective on top of health %v",
+			got[0].Score, got[0].Health)
 	}
 }

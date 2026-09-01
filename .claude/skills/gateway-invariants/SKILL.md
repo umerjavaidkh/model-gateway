@@ -36,6 +36,12 @@ that are not are the ones worth re-reading, because nothing will catch them.
 - **Exactly one usage event per request, on every exit path** — including 401s,
   budget refusals and mid-stream failures. A request that burned upstream tokens
   before erroring still costs money.
+- **Derive behaviour from the call site, not from caller metadata.** If a
+  method *is* the streaming path, it must not read `Meta.Stream` to find out;
+  if it *is* the failure path, it must not infer that from a field. This has
+  now caused two bugs — a usage event mislabelled, and a nil dereference where
+  a cursor was expected — and both looked like transport bugs rather than what
+  they were.
 - **Nothing blocks unbudgeted.** Guardrails declare a timeout and failure mode;
   the caller enforces it rather than trusting the implementation.
 
