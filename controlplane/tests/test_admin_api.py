@@ -77,8 +77,11 @@ async def test_issue_returns_the_secret_exactly_once(client: AsyncClient) -> Non
 
     # There is no way to read it back. That is the property that makes a leaked
     # database useless: what is stored is an HMAC under a pepper the database
-    # never sees.
-    assert await client.get("/v1/keys/key-1") is not None
+    # never sees. Asserting the route simply does not exist is the only honest
+    # way to state that — an earlier version of this asserted the response was
+    # "not None", which is true of every response and tested nothing.
+    readback = await client.get("/v1/keys/key-1")
+    assert readback.status_code in (404, 405)
 
 
 async def test_the_issued_key_authenticates_against_the_snapshot(client: AsyncClient) -> None:
@@ -141,7 +144,8 @@ async def test_revoking_removes_a_key_from_the_snapshot_but_not_the_record(
     client: AsyncClient,
 ) -> None:
     await client.post("/v1/tenants/acme/keys", json={"key_id": "key-1", "application_id": "app-1"})
-    assert (await client.delete("/v1/keys/key-1")).status_code == 204
+    revoked = await client.delete("/v1/keys/key-1")
+    assert revoked.status_code == 204
 
     raw = (await client.get("/v1/snapshots/current")).content
     snapshot = pb.Snapshot()
@@ -149,7 +153,8 @@ async def test_revoking_removes_a_key_from_the_snapshot_but_not_the_record(
     assert len(snapshot.tenants[0].principals) == 0
 
     # Revoking twice is not an error; an agent retrying must not get a 404.
-    assert (await client.delete("/v1/keys/key-1")).status_code == 204
+    again = await client.delete("/v1/keys/key-1")
+    assert again.status_code == 204
 
 
 async def test_a_retried_request_does_not_issue_a_second_key(client: AsyncClient) -> None:
@@ -227,8 +232,11 @@ async def test_a_key_needs_exactly_one_owner(client: AsyncClient) -> None:
 
 
 async def test_errors_map_to_the_right_status(client: AsyncClient) -> None:
-    assert (await client.post("/v1/keys/nope/rotate", json={})).status_code == 404
-    assert (await client.delete("/v1/keys/nope")).status_code == 404
+    rotate_missing = await client.post("/v1/keys/nope/rotate", json={})
+    assert rotate_missing.status_code == 404
+
+    revoke_missing = await client.delete("/v1/keys/nope")
+    assert revoke_missing.status_code == 404
 
     await client.post("/v1/tenants/acme/keys", json={"key_id": "key-1", "application_id": "app-1"})
     duplicate = await client.post(

@@ -213,7 +213,9 @@ async def test_revoked_keys_are_excluded_but_not_deleted(session: AsyncSession) 
     assert {p.key_id for p in tenant.principals} == {"key-app", "key-user"}
     assert b"\x03" * 32 not in tenant.keys
     # Still on record, which is the point of revoking rather than deleting.
-    assert await session.get(models.ApiKey, "key-revoked") is not None
+    revoked = await session.get(models.ApiKey, "key-revoked")
+    assert revoked is not None
+    assert revoked.revoked_at is not None
 
 
 async def test_allowlist_fails_closed(session: AsyncSession) -> None:
