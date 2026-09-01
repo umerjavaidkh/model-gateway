@@ -31,6 +31,12 @@ class Port(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     PORT_GUARDRAIL: _ClassVar[Port]
     PORT_STORE: _ClassVar[Port]
     PORT_TELEMETRY: _ClassVar[Port]
+
+class FailureMode(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    FAILURE_MODE_UNSPECIFIED: _ClassVar[FailureMode]
+    FAILURE_MODE_OPEN: _ClassVar[FailureMode]
+    FAILURE_MODE_CLOSED: _ClassVar[FailureMode]
 TRUST_TIER_UNSPECIFIED: TrustTier
 TRUST_TIER_EXTERNAL: TrustTier
 TRUST_TIER_PRIVATE_CLOUD: TrustTier
@@ -48,6 +54,9 @@ PORT_PROVIDER: Port
 PORT_GUARDRAIL: Port
 PORT_STORE: Port
 PORT_TELEMETRY: Port
+FAILURE_MODE_UNSPECIFIED: FailureMode
+FAILURE_MODE_OPEN: FailureMode
+FAILURE_MODE_CLOSED: FailureMode
 
 class LayerVersion(_message.Message):
     __slots__ = ("number", "digest")
@@ -108,6 +117,24 @@ class ModelAlias(_message.Message):
     name: str
     targets: _containers.RepeatedCompositeFieldContainer[RoutingKey]
     def __init__(self, name: _Optional[str] = ..., targets: _Optional[_Iterable[_Union[RoutingKey, _Mapping]]] = ...) -> None: ...
+
+class GuardrailBinding(_message.Message):
+    __slots__ = ("component", "version", "config_ref", "timeout_ms", "failure_mode", "blocking", "phases")
+    COMPONENT_FIELD_NUMBER: _ClassVar[int]
+    VERSION_FIELD_NUMBER: _ClassVar[int]
+    CONFIG_REF_FIELD_NUMBER: _ClassVar[int]
+    TIMEOUT_MS_FIELD_NUMBER: _ClassVar[int]
+    FAILURE_MODE_FIELD_NUMBER: _ClassVar[int]
+    BLOCKING_FIELD_NUMBER: _ClassVar[int]
+    PHASES_FIELD_NUMBER: _ClassVar[int]
+    component: str
+    version: str
+    config_ref: str
+    timeout_ms: int
+    failure_mode: FailureMode
+    blocking: bool
+    phases: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, component: _Optional[str] = ..., version: _Optional[str] = ..., config_ref: _Optional[str] = ..., timeout_ms: _Optional[int] = ..., failure_mode: _Optional[_Union[FailureMode, str]] = ..., blocking: bool = ..., phases: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class PluginBinding(_message.Message):
     __slots__ = ("port", "component", "version", "config_ref")
@@ -200,7 +227,7 @@ class KeyEntry(_message.Message):
     def __init__(self, lookup: _Optional[bytes] = ..., key_id: _Optional[str] = ...) -> None: ...
 
 class GlobalLayer(_message.Message):
-    __slots__ = ("version", "built_at_unix_ms", "deployments", "aliases", "tenant_prefixes", "default_plugins", "policy_bundle_ref")
+    __slots__ = ("version", "built_at_unix_ms", "deployments", "aliases", "tenant_prefixes", "default_plugins", "policy_bundle_ref", "default_guardrails")
     class TenantPrefixesEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -215,6 +242,7 @@ class GlobalLayer(_message.Message):
     TENANT_PREFIXES_FIELD_NUMBER: _ClassVar[int]
     DEFAULT_PLUGINS_FIELD_NUMBER: _ClassVar[int]
     POLICY_BUNDLE_REF_FIELD_NUMBER: _ClassVar[int]
+    DEFAULT_GUARDRAILS_FIELD_NUMBER: _ClassVar[int]
     version: LayerVersion
     built_at_unix_ms: int
     deployments: _containers.RepeatedCompositeFieldContainer[Deployment]
@@ -222,10 +250,11 @@ class GlobalLayer(_message.Message):
     tenant_prefixes: _containers.ScalarMap[str, str]
     default_plugins: _containers.RepeatedCompositeFieldContainer[PluginBinding]
     policy_bundle_ref: str
-    def __init__(self, version: _Optional[_Union[LayerVersion, _Mapping]] = ..., built_at_unix_ms: _Optional[int] = ..., deployments: _Optional[_Iterable[_Union[Deployment, _Mapping]]] = ..., aliases: _Optional[_Iterable[_Union[ModelAlias, _Mapping]]] = ..., tenant_prefixes: _Optional[_Mapping[str, str]] = ..., default_plugins: _Optional[_Iterable[_Union[PluginBinding, _Mapping]]] = ..., policy_bundle_ref: _Optional[str] = ...) -> None: ...
+    default_guardrails: _containers.RepeatedCompositeFieldContainer[GuardrailBinding]
+    def __init__(self, version: _Optional[_Union[LayerVersion, _Mapping]] = ..., built_at_unix_ms: _Optional[int] = ..., deployments: _Optional[_Iterable[_Union[Deployment, _Mapping]]] = ..., aliases: _Optional[_Iterable[_Union[ModelAlias, _Mapping]]] = ..., tenant_prefixes: _Optional[_Mapping[str, str]] = ..., default_plugins: _Optional[_Iterable[_Union[PluginBinding, _Mapping]]] = ..., policy_bundle_ref: _Optional[str] = ..., default_guardrails: _Optional[_Iterable[_Union[GuardrailBinding, _Mapping]]] = ...) -> None: ...
 
 class TenantLayer(_message.Message):
-    __slots__ = ("tenant", "version", "built_at_unix_ms", "tier", "principals", "keys", "alias_overrides", "budgets", "plugins", "min_trust_tier")
+    __slots__ = ("tenant", "version", "built_at_unix_ms", "tier", "principals", "keys", "alias_overrides", "budgets", "plugins", "min_trust_tier", "guardrails")
     TENANT_FIELD_NUMBER: _ClassVar[int]
     VERSION_FIELD_NUMBER: _ClassVar[int]
     BUILT_AT_UNIX_MS_FIELD_NUMBER: _ClassVar[int]
@@ -236,6 +265,7 @@ class TenantLayer(_message.Message):
     BUDGETS_FIELD_NUMBER: _ClassVar[int]
     PLUGINS_FIELD_NUMBER: _ClassVar[int]
     MIN_TRUST_TIER_FIELD_NUMBER: _ClassVar[int]
+    GUARDRAILS_FIELD_NUMBER: _ClassVar[int]
     tenant: str
     version: LayerVersion
     built_at_unix_ms: int
@@ -246,7 +276,8 @@ class TenantLayer(_message.Message):
     budgets: _containers.RepeatedCompositeFieldContainer[BudgetState]
     plugins: _containers.RepeatedCompositeFieldContainer[PluginBinding]
     min_trust_tier: TrustTier
-    def __init__(self, tenant: _Optional[str] = ..., version: _Optional[_Union[LayerVersion, _Mapping]] = ..., built_at_unix_ms: _Optional[int] = ..., tier: _Optional[str] = ..., principals: _Optional[_Iterable[_Union[Principal, _Mapping]]] = ..., keys: _Optional[_Iterable[_Union[KeyEntry, _Mapping]]] = ..., alias_overrides: _Optional[_Iterable[_Union[ModelAlias, _Mapping]]] = ..., budgets: _Optional[_Iterable[_Union[BudgetState, _Mapping]]] = ..., plugins: _Optional[_Iterable[_Union[PluginBinding, _Mapping]]] = ..., min_trust_tier: _Optional[_Union[TrustTier, str]] = ...) -> None: ...
+    guardrails: _containers.RepeatedCompositeFieldContainer[GuardrailBinding]
+    def __init__(self, tenant: _Optional[str] = ..., version: _Optional[_Union[LayerVersion, _Mapping]] = ..., built_at_unix_ms: _Optional[int] = ..., tier: _Optional[str] = ..., principals: _Optional[_Iterable[_Union[Principal, _Mapping]]] = ..., keys: _Optional[_Iterable[_Union[KeyEntry, _Mapping]]] = ..., alias_overrides: _Optional[_Iterable[_Union[ModelAlias, _Mapping]]] = ..., budgets: _Optional[_Iterable[_Union[BudgetState, _Mapping]]] = ..., plugins: _Optional[_Iterable[_Union[PluginBinding, _Mapping]]] = ..., min_trust_tier: _Optional[_Union[TrustTier, str]] = ..., guardrails: _Optional[_Iterable[_Union[GuardrailBinding, _Mapping]]] = ...) -> None: ...
 
 class Snapshot(_message.Message):
     __slots__ = ("global_layer", "tenants")

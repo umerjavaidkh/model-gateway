@@ -32,7 +32,13 @@ from model_gateway_control.domain.catalog import (
     TrustTier,
 )
 from model_gateway_control.domain.identity import BudgetRef, Principal
-from model_gateway_control.domain.tenant import Fleet, PluginBinding, Tenant
+from model_gateway_control.domain.tenant import (
+    FailureMode,
+    Fleet,
+    GuardrailBinding,
+    PluginBinding,
+    Tenant,
+)
 from model_gateway_control.errors import InvalidRequestError
 from model_gateway_control.wire import snapshot_pb2 as pb
 
@@ -163,6 +169,8 @@ def encode_fleet(fleet: Fleet, tenants: list[Tenant], built_at: datetime) -> pb.
         layer.aliases.append(_encode_alias(alias))
     for binding in fleet.default_plugins:
         layer.default_plugins.append(_encode_plugin(binding))
+    for guardrail in fleet.default_guardrails:
+        layer.default_guardrails.append(_encode_guardrail(guardrail))
 
     # The prefix map lives in the global layer because resolving a key must
     # find its tenant before any tenant layer is consulted.
@@ -193,6 +201,8 @@ def encode_tenant(tenant: Tenant, built_at: datetime) -> pb.TenantLayer:
         layer.budgets.append(_encode_budget(budget))
     for binding in tenant.plugins:
         layer.plugins.append(_encode_plugin(binding))
+    for guardrail in tenant.guardrails:
+        layer.guardrails.append(_encode_guardrail(guardrail))
     return layer
 
 
@@ -234,6 +244,28 @@ def _encode_plugin(b: PluginBinding) -> pb.PluginBinding:
         component=b.component,
         version=b.version,
         config_ref=b.config_ref,
+    )
+
+
+_FAILURE_MODES = {
+    FailureMode.OPEN: pb.FAILURE_MODE_OPEN,
+    FailureMode.CLOSED: pb.FAILURE_MODE_CLOSED,
+}
+
+
+def _encode_guardrail(g: GuardrailBinding) -> pb.GuardrailBinding:
+    return pb.GuardrailBinding(
+        component=g.component,
+        version=g.version,
+        config_ref=g.config_ref,
+        timeout_ms=g.timeout_ms,
+        # An unmapped mode encodes as closed rather than unspecified. The data
+        # plane reads an unrecognised mode as fail-closed too, so the safe
+        # reading of "I do not know what this control does" is consistent on
+        # both sides.
+        failure_mode=_FAILURE_MODES.get(g.failure_mode, pb.FAILURE_MODE_CLOSED),
+        blocking=g.blocking,
+        phases=list(g.phases),
     )
 
 

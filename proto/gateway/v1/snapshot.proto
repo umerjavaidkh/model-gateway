@@ -105,6 +105,43 @@ message ModelAlias {
   repeated RoutingKey targets = 2;
 }
 
+// FailureMode is what to do when a guardrail errors or exceeds its budget.
+enum FailureMode {
+  FAILURE_MODE_UNSPECIFIED = 0;
+  // Allow the request. For detection that is useful but not authoritative —
+  // prompt-injection heuristics are the example the design names, because
+  // shipping them as a blocking control buys an outage risk in exchange for
+  // security theatre.
+  FAILURE_MODE_OPEN = 1;
+  // Refuse the request. For controls where the failure is not recoverable: a
+  // leaked credential cannot be un-leaked.
+  FAILURE_MODE_CLOSED = 2;
+}
+
+// GuardrailBinding is one guardrail and the budget it is admitted under.
+//
+// A list rather than one binding per port, because a tenant genuinely runs
+// several: a secret scan that blocks, an injection heuristic that only alerts,
+// a content policy. Modelling it as one-per-port would have forced them into
+// one component and made their budgets indistinguishable.
+message GuardrailBinding {
+  string component = 1;
+  string version = 2;
+  string config_ref = 3;
+  // timeout_ms is enforced by the caller rather than trusted to the
+  // implementation. A guardrail that hangs must not be able to hang the
+  // request, and asking it to police itself assumes the thing that failed.
+  uint32 timeout_ms = 4;
+  FailureMode failure_mode = 5;
+  // blocking guardrails run inline and can refuse or rewrite. Non-blocking
+  // ones run off the request path on a copy and can only alert — which is the
+  // honest shape for anything whose accuracy does not justify refusing real
+  // traffic.
+  bool blocking = 6;
+  // phases the guardrail inspects. Empty means the request leg only.
+  repeated string phases = 7;
+}
+
 message PluginBinding {
   Port port = 1;
   string component = 2;
@@ -189,6 +226,8 @@ message GlobalLayer {
   map<string, string> tenant_prefixes = 5;
   repeated PluginBinding default_plugins = 6;
   string policy_bundle_ref = 7;
+  // Guardrails applied to any tenant that declares none of its own.
+  repeated GuardrailBinding default_guardrails = 8;
 }
 
 // TenantLayer is one tenant's slice: small, and changes constantly. It is
@@ -207,6 +246,11 @@ message TenantLayer {
   repeated BudgetState budgets = 8;
   repeated PluginBinding plugins = 9;
   TrustTier min_trust_tier = 10;
+  // Guardrails for this tenant. A tenant that declares any replaces the fleet
+  // defaults entirely rather than merging with them: merging two lists of
+  // things that can refuse traffic produces a set nobody can predict, and
+  // "which guardrails am I actually running" must have a simple answer.
+  repeated GuardrailBinding guardrails = 11;
 }
 
 // Snapshot is a global layer plus the tenant layers composed onto it. Layers

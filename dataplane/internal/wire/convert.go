@@ -16,6 +16,7 @@
 package wire
 
 import (
+	"math"
 	"time"
 
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/core"
@@ -68,6 +69,9 @@ func DecodeGlobal(msg *pb.GlobalLayer) core.GlobalSpec {
 	for _, p := range msg.GetDefaultPlugins() {
 		spec.DefaultPlugins = append(spec.DefaultPlugins, decodePlugin(p))
 	}
+	for _, g := range msg.GetDefaultGuardrails() {
+		spec.DefaultGuardrails = append(spec.DefaultGuardrails, decodeGuardrail(g))
+	}
 	return spec
 }
 
@@ -105,6 +109,9 @@ func DecodeTenant(msg *pb.TenantLayer) core.TenantSpec {
 	for _, p := range msg.GetPlugins() {
 		spec.Plugins = append(spec.Plugins, decodePlugin(p))
 	}
+	for _, g := range msg.GetGuardrails() {
+		spec.Guardrails = append(spec.Guardrails, decodeGuardrail(g))
+	}
 	return spec
 }
 
@@ -132,6 +139,9 @@ func EncodeGlobal(spec core.GlobalSpec) *pb.GlobalLayer {
 	for _, p := range spec.DefaultPlugins {
 		msg.DefaultPlugins = append(msg.DefaultPlugins, encodePlugin(p))
 	}
+	for _, g := range spec.DefaultGuardrails {
+		msg.DefaultGuardrails = append(msg.DefaultGuardrails, encodeGuardrail(g))
+	}
 	return msg
 }
 
@@ -158,6 +168,9 @@ func EncodeTenant(spec core.TenantSpec) *pb.TenantLayer {
 	}
 	for _, p := range spec.Plugins {
 		msg.Plugins = append(msg.Plugins, encodePlugin(p))
+	}
+	for _, g := range spec.Guardrails {
+		msg.Guardrails = append(msg.Guardrails, encodeGuardrail(g))
 	}
 	return msg
 }
@@ -257,6 +270,87 @@ func encodePlugin(p core.PluginBinding) *pb.PluginBinding {
 		Component: p.Component,
 		Version:   p.Version,
 		ConfigRef: p.ConfigRef,
+	}
+}
+
+// Failure mode converts through an explicit table, and an unrecognised value
+// becomes fail-closed. A guardrail whose mode a worker does not understand
+// must not be silently treated as advisory: the safe reading of "I do not know
+// what this control does" is to enforce it.
+var failureModes = map[pb.FailureMode]core.FailureMode{
+	pb.FailureMode_FAILURE_MODE_OPEN:   core.FailOpen,
+	pb.FailureMode_FAILURE_MODE_CLOSED: core.FailClosed,
+}
+
+func decodeGuardrail(g *pb.GuardrailBinding) core.GuardrailBinding {
+	mode, ok := failureModes[g.GetFailureMode()]
+	if !ok {
+		mode = core.FailClosed
+	}
+
+	phases := make([]core.Phase, 0, len(g.GetPhases()))
+	for _, name := range g.GetPhases() {
+		if name == "response" {
+			phases = append(phases, core.PhaseResponse)
+		} else {
+			phases = append(phases, core.PhaseRequest)
+		}
+	}
+
+	return core.GuardrailBinding{
+		Component: g.GetComponent(),
+		Version:   g.GetVersion(),
+		ConfigRef: g.GetConfigRef(),
+		Budget: core.GuardrailBudget{
+			Timeout:  time.Duration(g.GetTimeoutMs()) * time.Millisecond,
+			Mode:     mode,
+			Blocking: g.GetBlocking(),
+			Phases:   phases,
+		},
+	}
+}
+
+func encodeGuardrail(g core.GuardrailBinding) *pb.GuardrailBinding {
+	mode := pb.FailureMode_FAILURE_MODE_CLOSED
+	if g.Budget.Mode == core.FailOpen {
+		mode = pb.FailureMode_FAILURE_MODE_OPEN
+	}
+
+	phases := make([]string, 0, len(g.Budget.Phases))
+	for _, phase := range g.Budget.Phases {
+		if phase == core.PhaseResponse {
+			phases = append(phases, "response")
+		} else {
+			phases = append(phases, "request")
+		}
+	}
+
+	return &pb.GuardrailBinding{
+		Component:   g.Component,
+		Version:     g.Version,
+		ConfigRef:   g.ConfigRef,
+		TimeoutMs:   clampMillis(g.Budget.Timeout),
+		FailureMode: mode,
+		Blocking:    g.Budget.Blocking,
+		Phases:      phases,
+	}
+}
+
+// clampMillis narrows a duration to the wire's uint32 milliseconds.
+//
+// A guardrail timeout is realistically single-digit milliseconds, but an
+// unclamped conversion wraps silently: a nonsensical 50-day budget would
+// arrive as a small one and the guardrail would appear to time out constantly.
+// Better to carry the largest representable value than a wrong small one.
+func clampMillis(d time.Duration) uint32 {
+	ms := d.Milliseconds()
+	switch {
+	case ms <= 0:
+		return 0
+	case ms > int64(math.MaxUint32):
+		return math.MaxUint32
+	default:
+		return uint32(ms)
 	}
 }
 

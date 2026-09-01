@@ -76,6 +76,8 @@ type GlobalSpec struct {
 	// DefaultPlugins apply to any tenant that does not override the port.
 	DefaultPlugins  []PluginBinding
 	PolicyBundleRef string
+	// DefaultGuardrails apply to any tenant declaring none of its own.
+	DefaultGuardrails []GuardrailBinding
 }
 
 // TenantSpec is the unvalidated input to NewTenantLayer.
@@ -96,6 +98,11 @@ type TenantSpec struct {
 	AliasOverrides []ModelAlias
 	Budgets        []BudgetState
 	Plugins        []PluginBinding
+	// Guardrails for this tenant. Declaring any replaces the fleet defaults
+	// entirely rather than merging: merging two lists of things that can refuse
+	// traffic produces a set nobody can predict, and "which guardrails am I
+	// running" must have a simple answer.
+	Guardrails []GuardrailBinding
 
 	// MinTrustTier is the floor for every request from this tenant, before the
 	// request's own data classification raises it further. Data residency is
@@ -119,6 +126,7 @@ type GlobalLayer struct {
 	aliases         map[string]ModelAlias
 	tenantByPrefix  map[KeyPrefix]TenantID
 	plugins         map[PortName]PluginBinding
+	guardrails      []GuardrailBinding
 	policyBundleRef string
 }
 
@@ -139,6 +147,7 @@ func NewGlobalLayer(spec GlobalSpec) (*GlobalLayer, error) {
 		aliases:         make(map[string]ModelAlias, len(spec.Aliases)),
 		tenantByPrefix:  maps.Clone(spec.TenantPrefixes),
 		plugins:         make(map[PortName]PluginBinding, len(spec.DefaultPlugins)),
+		guardrails:      spec.DefaultGuardrails,
 		policyBundleRef: spec.PolicyBundleRef,
 	}
 	if g.tenantByPrefix == nil {
@@ -211,6 +220,7 @@ type TenantLayer struct {
 	aliases      map[string]ModelAlias
 	budgets      map[BudgetID]BudgetState
 	plugins      map[PortName]PluginBinding
+	guardrails   []GuardrailBinding
 	minTrustTier TrustTier
 }
 
@@ -233,6 +243,7 @@ func NewTenantLayer(spec TenantSpec) (*TenantLayer, error) {
 		aliases:      make(map[string]ModelAlias, len(spec.AliasOverrides)),
 		budgets:      make(map[BudgetID]BudgetState, len(spec.Budgets)),
 		plugins:      make(map[PortName]PluginBinding, len(spec.Plugins)),
+		guardrails:   spec.Guardrails,
 		minTrustTier: spec.MinTrustTier,
 	}
 	if t.keys == nil {
@@ -486,6 +497,28 @@ func (s *Snapshot) PluginBinding(tenant TenantID, port PortName) (PluginBinding,
 	}
 	b, ok := s.global.plugins[port]
 	return b, ok
+}
+
+// Guardrails reports which guardrails apply to a tenant, on the given leg.
+//
+// A tenant declaring any replaces the fleet defaults rather than adding to
+// them, so the answer to "what is running" is one list from one place.
+//
+// The returned slice aliases snapshot memory; callers may read it and must not
+// write to it.
+func (s *Snapshot) Guardrails(tenant TenantID, phase Phase) []GuardrailBinding {
+	bindings := s.global.guardrails
+	if layer, ok := s.tenants[tenant]; ok && len(layer.guardrails) > 0 {
+		bindings = layer.guardrails
+	}
+
+	applicable := make([]GuardrailBinding, 0, len(bindings))
+	for _, binding := range bindings {
+		if binding.Inspects(phase) {
+			applicable = append(applicable, binding)
+		}
+	}
+	return applicable
 }
 
 // Budget reports one budget's state within a tenant.
