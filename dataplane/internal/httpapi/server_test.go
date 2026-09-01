@@ -214,3 +214,44 @@ func TestWrongMethodAndUnknownPath(t *testing.T) {
 		}
 	}
 }
+
+func TestMalformedModelNamesAreRejectedAtTheBoundary(t *testing.T) {
+	// A newline in a model name reaches the log, and under a text handler it
+	// would forge a second log entry. Refusing it at the door means nothing
+	// downstream has to defend against it.
+	handler := newTestServer(t)
+	tests := map[string]string{
+		"newline":         "echo-model\nlevel=INFO msg=\"forged entry\"",
+		"carriage return": "echo-model\rmsg=forged",
+		"null byte":       "echo-model\x00",
+		"escape sequence": "echo-model\x1b[31m",
+		"absurdly long":   strings.Repeat("m", 300),
+		// Invalid UTF-8 cannot arrive through a JSON body — both the encoder
+		// and the decoder replace bad bytes with U+FFFD — so the validator
+		// covers that case as a unit test instead.
+	}
+
+	for name, model := range tests {
+		t.Run(name, func(t *testing.T) {
+			body, err := json.Marshal(map[string]string{"model": model})
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			rec := post(t, handler, "gw_acme_secret-1", string(body))
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 for %q", rec.Code, name)
+			}
+		})
+	}
+}
+
+func TestOrdinaryModelNamesAreAccepted(t *testing.T) {
+	// The validation must not reject anything a real provider would serve.
+	handler := newTestServer(t)
+	for _, model := range []string{"echo-model", "gpt-4o-mini", "llama-3.3-70b", "claude-opus-5"} {
+		rec := post(t, handler, "gw_acme_secret-1", `{"model":"`+model+`"}`)
+		if rec.Code == http.StatusBadRequest {
+			t.Fatalf("%q was rejected as malformed", model)
+		}
+	}
+}

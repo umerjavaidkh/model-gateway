@@ -144,6 +144,14 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, s.logger, requestID, core.New(core.CodeInvalidRequest, "the request has no model"))
 		return
 	}
+	// Validate at the boundary so that no stage downstream — routing, logging,
+	// metrics, error messages — has to defend against a control character or an
+	// unbounded string in a caller-supplied name.
+	if !validModelName(parsed.Model) {
+		writeError(w, s.logger, requestID, core.New(core.CodeInvalidRequest,
+			"the model name is malformed or too long"))
+		return
+	}
 	if parsed.Stream {
 		// Better an explicit refusal than silently returning a non-streaming
 		// body to a client that is waiting for server-sent events.
@@ -182,7 +190,10 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	s.logger.Info("request served",
 		slog.String("request_id", requestID),
 		slog.String("tenant", string(result.Principal.Tenant)),
-		slog.String("model", parsed.Model),
+		// The only caller-controlled value in this record. Validated above and
+		// sanitised here, because a log record must be safe whatever handler is
+		// configured.
+		slog.String("model", logSafe(parsed.Model)),
 		slog.String("deployment", string(result.Deployment)),
 		slog.Int64("input_tokens", result.Usage.Input),
 		slog.Int64("output_tokens", result.Usage.Output),
