@@ -15,10 +15,12 @@ import (
 	"syscall"
 
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/adapters/echo"
+	"github.com/umerjavaidkh/model-gateway/dataplane/internal/adapters/openaicompat"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/config"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/core"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/gateway"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/httpapi"
+	"github.com/umerjavaidkh/model-gateway/dataplane/internal/secrets"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/snapshot"
 )
 
@@ -53,11 +55,17 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
-	providers, err := gateway.NewStaticProviders(echo.New())
+	// echo stays registered alongside the real adapter: it is what the demo
+	// snapshot and the load harness route to, and it costs nothing to keep.
+	providers, err := gateway.NewStaticProviders(echo.New(), openaicompat.New())
 	if err != nil {
 		return err
 	}
-	pipeline, err := gateway.New(providers, gateway.NoCredentials{}, cfg.KeyPepper)
+	credentials, err := secrets.NewResolver(secrets.NewEnvStore())
+	if err != nil {
+		return err
+	}
+	pipeline, err := gateway.New(providers, credentials, cfg.KeyPepper)
 	if err != nil {
 		return err
 	}

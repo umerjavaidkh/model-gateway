@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -33,7 +34,8 @@ const (
 	HeaderSnapshotVersion = "X-Gateway-Snapshot-Version"
 	// HeaderWarning is the standard header used to tell a caller their key is
 	// the outgoing generation of a rotation.
-	HeaderWarning = "Warning"
+	HeaderWarning        = "Warning"
+	deprecatedKeyWarning = `299 - "This API key is deprecated and will stop working after its rotation window"`
 
 	// maxBodyBytes caps an inbound payload. Without a cap, one caller can make
 	// the worker allocate until it is killed, which is a denial of service that
@@ -152,14 +154,6 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			"the model name is malformed or too long"))
 		return
 	}
-	if parsed.Stream {
-		// Better an explicit refusal than silently returning a non-streaming
-		// body to a client that is waiting for server-sent events.
-		writeError(w, s.logger, requestID, core.New(core.CodeInvalidRequest,
-			"streaming is not supported yet"))
-		return
-	}
-
 	req := &gateway.Request{
 		APIKey: bearerToken(r),
 		Body:   body,
@@ -167,7 +161,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			RequestID:      requestID,
 			Model:          parsed.Model,
 			Endpoint:       core.EndpointChatCompletions,
-			Stream:         false,
+			Stream:         parsed.Stream,
 			PayloadBytes:   len(body),
 			SourceIP:       clientIP(r),
 			IdempotencyKey: r.Header.Get("Idempotency-Key"),
@@ -178,9 +172,14 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		req.Meta.Deadline = deadline
 	}
 
+	if parsed.Stream {
+		s.streamCompletion(w, r, snap, req, requestID)
+		return
+	}
+
 	result, err := s.pipeline.Handle(r.Context(), snap, req)
 	if result != nil && result.Principal.Deprecated {
-		w.Header().Set(HeaderWarning, `299 - "This API key is deprecated and will stop working after its rotation window"`)
+		w.Header().Set(HeaderWarning, deprecatedKeyWarning)
 	}
 	if err != nil {
 		writeError(w, s.logger, requestID, err)
@@ -202,6 +201,91 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(result.StatusCode)
 	_, _ = w.Write(result.Body)
+}
+
+// streamCompletion relays a provider stream to the caller as server-sent
+// events.
+//
+// Two things make this harder than copying bytes:
+//
+// Once the first byte is written the status code is committed, so an error
+// mid-stream cannot become a 502. The only honest signal left is an SSE error
+// event followed by closing the stream, and the record of what happened lives
+// in the log and the usage event rather than in the HTTP status.
+//
+// Each event must be flushed immediately. Without that, Go buffers the
+// response and the caller sees nothing until the completion finishes — which
+// is exactly the latency that streaming exists to avoid.
+func (s *Server) streamCompletion(w http.ResponseWriter, r *http.Request, snap *core.Snapshot, req *gateway.Request, requestID string) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, s.logger, requestID, core.New(core.CodeInternal, "this server cannot stream"))
+		return
+	}
+
+	result, err := s.pipeline.HandleStream(r.Context(), snap, req)
+	if result != nil && result.Principal.Deprecated {
+		w.Header().Set(HeaderWarning, deprecatedKeyWarning)
+	}
+	if err != nil {
+		// Nothing has been written yet, so a normal error response is still
+		// possible. This is the only window in which that is true.
+		writeError(w, s.logger, requestID, err)
+		return
+	}
+	defer func() { _ = result.Chunks.Close() }()
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	// Tell any intermediary not to buffer, which would defeat streaming just as
+	// thoroughly as not flushing here.
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	var usage core.TokenUsage
+	for {
+		chunk, err := result.Chunks.Next(r.Context())
+		if chunk.Usage.Input != 0 || chunk.Usage.Output != 0 {
+			usage = chunk.Usage
+		}
+		if len(chunk.Body) > 0 {
+			if _, writeErr := fmt.Fprintf(w, "data: %s\n\n", chunk.Body); writeErr != nil {
+				// The caller hung up. Not an error worth alarming on, but the
+				// upstream call still cost money and is still accounted for.
+				s.logger.Info("client disconnected mid-stream",
+					slog.String("request_id", requestID))
+				return
+			}
+			flusher.Flush()
+		}
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			s.logger.Error("stream failed after the response began",
+				slog.String("request_id", requestID),
+				slog.String("code", string(core.CodeOf(err))),
+				slog.String("error", err.Error()))
+			// The status is already 200. An error event is the only thing left
+			// that a client can act on.
+			_, _ = fmt.Fprintf(w, "event: error\ndata: {\"error\":{\"code\":%q,\"request_id\":%q}}\n\n",
+				core.CodeOf(err), requestID)
+			flusher.Flush()
+			return
+		}
+	}
+
+	_, _ = io.WriteString(w, "data: [DONE]\n\n")
+	flusher.Flush()
+
+	s.logger.Info("stream served",
+		slog.String("request_id", requestID),
+		slog.String("tenant", string(result.Principal.Tenant)),
+		slog.String("model", logSafe(req.Meta.Model)),
+		slog.String("deployment", string(result.Deployment)),
+		slog.Int64("input_tokens", usage.Input),
+		slog.Int64("output_tokens", usage.Output))
 }
 
 // recoverPanics turns a panic in one request into a 500 for that request.

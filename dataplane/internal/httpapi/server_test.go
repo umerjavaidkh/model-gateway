@@ -114,7 +114,6 @@ func TestErrorsMapToTheRightStatus(t *testing.T) {
 		{name: "unknown model", key: "gw_acme_secret-1", body: `{"model":"nope"}`, want: http.StatusNotFound, code: "model_not_found"},
 		{name: "malformed json", key: "gw_acme_secret-1", body: `{`, want: http.StatusBadRequest, code: "invalid_request"},
 		{name: "no model field", key: "gw_acme_secret-1", body: `{}`, want: http.StatusBadRequest, code: "invalid_request"},
-		{name: "streaming not supported", key: "gw_acme_secret-1", body: `{"model":"echo-model","stream":true}`, want: http.StatusBadRequest, code: "invalid_request"},
 	}
 
 	for _, tc := range tests {

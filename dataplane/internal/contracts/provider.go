@@ -64,6 +64,13 @@ func RunProviderSuite(t *testing.T, newPort ProviderFactory, sample SampleCall) 
 			}
 			chunk, err := stream.Next(t.Context())
 			if errors.Is(err, io.EOF) {
+				// io.EOF must arrive on its own. Returning a chunk alongside it
+				// is the classic Go iterator trap: callers write
+				// `if err == io.EOF { break }` and drop the value, which loses
+				// whatever the final chunk carried.
+				if len(chunk.Body) > 0 || chunk.Final || chunk.Usage != (core.TokenUsage{}) {
+					t.Fatal("Next returned a chunk together with io.EOF; the terminating chunk must come first, with a nil error")
+				}
 				break
 			}
 			if err != nil {
