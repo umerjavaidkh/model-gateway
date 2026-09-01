@@ -17,7 +17,7 @@ help: ## Show this help
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | awk -F':.*?## ' '{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 
 .PHONY: check
-check: check-go check-py cover ## Run every check CI runs
+check: check-go check-py cover crosscheck ## Run every check CI runs
 
 .PHONY: check-go
 check-go: ## Format check, vet and test the Go data plane
@@ -36,6 +36,10 @@ check-py: ## Lint, type check and test the Python control plane
 	$(UV) run mypy
 	$(UV) run pytest
 
+.PHONY: crosscheck
+crosscheck: ## Prove the Python builder and the Go worker agree on the snapshot
+	./scripts/cross-language-check.sh
+
 .PHONY: proto
 proto: ## Regenerate Go code from proto/ (needs protoc and protoc-gen-go)
 	protoc --proto_path=proto \
@@ -51,6 +55,21 @@ proto: ## Regenerate Go code from proto/ (needs protoc and protoc-gen-go)
 		dataplane/internal/wire/gatewayv1/snapshot.pb.go
 	rm -f dataplane/internal/wire/gatewayv1/snapshot.pb.go.bak
 	cd dataplane && gofmt -w internal/wire/gatewayv1/snapshot.pb.go
+	# Python bindings from the same schema, in the same target: generating them
+	# separately is how the two halves of a shared contract drift apart.
+	protoc --proto_path=proto \
+		--python_out=controlplane/src/model_gateway_control/wire \
+		--pyi_out=controlplane/src/model_gateway_control/wire \
+		proto/gateway/v1/snapshot.proto
+	mv controlplane/src/model_gateway_control/wire/gateway/v1/snapshot_pb2.py \
+		controlplane/src/model_gateway_control/wire/snapshot_pb2.py
+	mv controlplane/src/model_gateway_control/wire/gateway/v1/snapshot_pb2.pyi \
+		controlplane/src/model_gateway_control/wire/snapshot_pb2.pyi
+	rm -rf controlplane/src/model_gateway_control/wire/gateway
+	sed -i.bak '/^# Protobuf Python Version:/d' \
+		controlplane/src/model_gateway_control/wire/snapshot_pb2.py \
+		controlplane/src/model_gateway_control/wire/snapshot_pb2.pyi
+	rm -f controlplane/src/model_gateway_control/wire/*.bak
 
 .PHONY: demo
 demo: ## Build a demo snapshot and run the gateway on :8080

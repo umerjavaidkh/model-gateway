@@ -243,7 +243,7 @@ func NewTenantLayer(spec TenantSpec) (*TenantLayer, error) {
 		if b.ID == "" {
 			return nil, Newf(CodeInvalidRequest, "tenant %q has a budget with no id", spec.Tenant)
 		}
-		if b.HeadroomBasisPoints > 10_000 {
+		if b.HeadroomBasisPoints > basisPointsPerUnit {
 			return nil, Newf(CodeInvalidRequest, "budget %q headroom exceeds 100%%", b.ID)
 		}
 		t.budgets[b.ID] = b

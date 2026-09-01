@@ -1,5 +1,12 @@
 package core
 
+// basisPointsPerUnit is how many basis points make one whole. A basis point is
+// one hundredth of a percent, so 10,000 of them are 100%. A unit definition
+// rather than a tunable, but named because the literal otherwise appears in
+// both the validation bound and the arithmetic — and one mistyped 1_000 would
+// make every budget ten times larger, which nothing surfaces until an invoice.
+const basisPointsPerUnit = 10_000
+
 // BudgetID names a spend limit defined in the control plane.
 type BudgetID string
 
@@ -57,7 +64,7 @@ type BudgetState struct {
 
 // Available is the spend remaining before the headroom band begins.
 func (b BudgetState) Available() MicroUSD {
-	reserved := b.LimitMicroUSD * MicroUSD(b.HeadroomBasisPoints) / 10_000
+	reserved := b.LimitMicroUSD * MicroUSD(b.HeadroomBasisPoints) / basisPointsPerUnit
 	remaining := b.LimitMicroUSD - reserved - b.SpentMicroUSD
 	if remaining < 0 {
 		return 0

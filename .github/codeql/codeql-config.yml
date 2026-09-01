@@ -1,0 +1,17 @@
+# CodeQL configuration.
+#
+# Generated protobuf bindings are excluded for the same reason they are excluded
+# from ruff, mypy and golangci-lint: we do not write them, we cannot fix them,
+# and `make proto` would undo any change made to them. Their findings are noise,
+# and noise is how a real finding gets scrolled past.
+#
+# Nothing else is excluded. In particular the analysis still covers every
+# hand-written line of the request path, the credential handling and the admin
+# surface — a gateway holds every provider credential in the organisation, so
+# narrowing this further would be trading the wrong thing for a quiet dashboard.
+name: model-gateway
+
+paths-ignore:
+  - controlplane/src/model_gateway_control/wire/snapshot_pb2.py
+  - controlplane/src/model_gateway_control/wire/snapshot_pb2.pyi
+  - dataplane/internal/wire/gatewayv1/snapshot.pb.go

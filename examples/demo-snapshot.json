@@ -1,0 +1,38 @@
+{
+  "fleet": {
+    "version": 1,
+    "deployments": [
+      {
+        "id": "echo-1",
+        "key": "echo-model",
+        "provider": "echo",
+        "endpoint": "in-process",
+        "region": "local",
+        "trust_tier": "internal",
+        "weight": 100,
+        "capabilities": ["streaming"]
+      }
+    ],
+    "aliases": [{ "name": "fast", "targets": ["echo-model"] }],
+    "policy_bundle_ref": "demo"
+  },
+  "tenants": [
+    {
+      "id": "demo",
+      "tier": "demo",
+      "version": 1,
+      "key_prefixes": ["demo"],
+      "min_trust_tier": "external",
+      "budgets": [{ "id": "demo-monthly", "scope": "ORG", "limit_micro_usd": 10000000 }],
+      "keys": [
+        {
+          "key_id": "demo-key",
+          "org": "demo-org",
+          "models_allow_all": true,
+          "budgets": [{ "id": "demo-monthly", "scope": "ORG" }],
+          "data_class": "internal"
+        }
+      ]
+    }
+  ]
+}

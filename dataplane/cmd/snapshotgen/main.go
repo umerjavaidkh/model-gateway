@@ -155,7 +155,7 @@ func run(cfg demoConfig) error {
 		return err
 	}
 
-	b, err := wire.Marshal(&pb.Snapshot{Global: global, Tenants: []*pb.TenantLayer{tenant}})
+	b, err := wire.Marshal(&pb.Snapshot{GlobalLayer: global, Tenants: []*pb.TenantLayer{tenant}})
 	if err != nil {
 		return err
 	}

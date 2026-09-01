@@ -64,6 +64,23 @@ jobs:
       - name: Fail if regenerating changed anything
         run: git diff --exit-code || { echo "::error::run 'make proto' and commit the result"; exit 1; }
 
+  crosslanguage:
+    name: Cross-language snapshot contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: dataplane/go.mod
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - working-directory: controlplane
+        run: uv sync --frozen
+      # Unit tests on either side can both pass while the two disagree about
+      # the bytes. This is the only check that catches that.
+      - run: ./scripts/cross-language-check.sh
+
   controlplane:
     name: Control plane (Python)
     runs-on: ubuntu-latest
