@@ -12,6 +12,22 @@
 name: model-gateway
 
 paths-ignore:
+  # Generated protobuf bindings.
   - controlplane/src/model_gateway_control/wire/snapshot_pb2.py
   - controlplane/src/model_gateway_control/wire/snapshot_pb2.pyi
   - dataplane/internal/wire/gatewayv1/snapshot.pb.go
+
+  # Alembic migrations. Every one declares revision, down_revision,
+  # branch_labels and depends_on at module level, and Alembic reads them by
+  # introspecting the module rather than by any code referencing them — so they
+  # are reported as unused globals in every migration, forever, four at a time.
+  #
+  # Excluding the directory rather than the query keeps that rule working on
+  # code where it means something. Nothing is lost here: a migration runs with
+  # no request, no argv and no user input, so the injection queries that would
+  # otherwise inspect its SQL have no source to trace from.
+  #
+  # ruff and mypy already exclude this directory, for the related reason that
+  # an applied migration is a historical record and reformatting one changes a
+  # file whose value is that it has not changed.
+  - controlplane/src/model_gateway_control/db/migrations/versions
