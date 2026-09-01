@@ -46,9 +46,11 @@ class Recognizer(Protocol):
     """Finds entities of one or more kinds in one language."""
 
     @property
-    def language(self) -> str: ...
+    def language(self) -> str:
+        """The language tag this recogniser is written for, e.g. "en"."""
 
-    def recognize(self, text: str) -> list[Entity]: ...
+    def recognize(self, text: str) -> list[Entity]:
+        """Return entities found in text, at byte offsets into its UTF-8 form."""
 
 
 @dataclass(frozen=True, slots=True)
