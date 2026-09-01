@@ -34,6 +34,12 @@ jobs:
       # -race because the snapshot's whole design is concurrent reads of
       # immutable state. A data race here is the one bug class we cannot ship.
       - run: go test -race -count=1 ./...
+      # Coverage is measured module-wide with cross-package attribution, so a
+      # helper exercised only by another package's tests still counts. Failing
+      # the build is what keeps the number from drifting down unnoticed.
+      - name: Coverage gate
+        working-directory: .
+        run: ./scripts/coverage.sh
 
   proto:
     name: Generated code is current
