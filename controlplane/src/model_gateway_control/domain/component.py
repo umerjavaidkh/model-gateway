@@ -36,6 +36,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
+from model_gateway_control.domain.signing import Signature
 from model_gateway_control.errors import InvalidRequestError, NotFoundError
 
 #: The official semver pattern, anchored. Versions are compared and displayed
@@ -306,6 +307,11 @@ class Component:
     manifest: Manifest
     status: Status = Status.PENDING
     admission: Admission | None = None
+    #: The publisher signature submitted with this component, if any. Kept as
+    #: evidence to be re-checked rather than as a claim that it was checked:
+    #: a verification result stored in the database is only as trustworthy as
+    #: the database, and the point of a signature is to not need that.
+    signature: Signature | None = None
 
     def __post_init__(self) -> None:
         if self.status is Status.ACTIVE and not self.is_admitted:
@@ -392,6 +398,7 @@ def admitted(
     runner: str,
     evidence_ref: str = "",
     passed: bool = True,
+    signature: Signature | None = None,
 ) -> Component:
     """Build a component carrying an admission bound to this exact manifest.
 
@@ -412,6 +419,7 @@ def admitted(
         manifest=manifest,
         status=Status.ACTIVE if passed else Status.PENDING,
         admission=record,
+        signature=signature,
     )
 
 

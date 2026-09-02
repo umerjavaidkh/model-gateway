@@ -301,6 +301,72 @@ check "a swapped module is refused" 1 "$swapped_exit"
 check "and it says why" 1 \
   "$(grep -c 'not the admitted' "$WORK/wasm-swapped.out")"
 
+echo "==> a publisher signature is required, and re-checked when a snapshot binds"
+# Two checks, deliberately. Registration verifies so a publisher gets a clear
+# error, and the snapshot builder verifies again because registration's answer
+# lives in the database — and so does the status that says a component is
+# bindable. If both came from there, whoever could write one could write the
+# other.
+stop "$ADMIN_PID"
+ADMIN_PID=""
+
+cd "$ROOT/controlplane"
+uv run gatewayctl keygen --key-id acme-2026 --publisher "ACME Corp" \
+  --out "$WORK/acme.pem" >"$WORK/trusted-keys.json" 2>/dev/null
+
+start_signing_admin() {
+  GATEWAY_TRUSTED_KEYS="$WORK/trusted-keys.json" \
+  GATEWAY_SIGNATURE_POLICY=required \
+  GATEWAY_ADMIN_PORT="$ADMIN_PORT" uv run gateway-admin >>"$WORK/admin.log" 2>&1 &
+  ADMIN_PID=$!
+  for _ in $(seq 1 60); do
+    curl -sf "http://127.0.0.1:$ADMIN_PORT/healthz" >/dev/null 2>&1 && return 0
+    sleep 0.25
+  done
+  echo "the signing control plane never came up" >&2
+  return 1
+}
+start_signing_admin
+
+cat >"$WORK/manifest.json" <<JSON
+{"name":"signed-guard","version":"1.0.0","port":"guardrail",
+ "latency_budget_ms":50,"execution":"sidecar","image":"$IMAGE_CONFORMING"}
+JSON
+
+post_component() {
+  admin -o /dev/null -w '%{http_code}' -X POST \
+    "http://127.0.0.1:$ADMIN_PORT/v1/components" \
+    -H 'Content-Type: application/json' -d "@$1"
+}
+
+check "an unsigned component is refused" 403 "$(post_component "$WORK/manifest.json")"
+
+uv run gatewayctl sign-manifest --manifest "$WORK/manifest.json" \
+  --key "$WORK/acme.pem" --key-id acme-2026 >"$WORK/signature.json" 2>/dev/null
+"$ROOT/scripts/merge-json.py" "$WORK/manifest.json" "$WORK/signature.json" \
+  >"$WORK/signed-request.json"
+
+check "a signed one is accepted" 201 "$(post_component "$WORK/signed-request.json")"
+check "and the signature is kept so it can be re-checked" acme-2026 \
+  "$(admin "http://127.0.0.1:$ADMIN_PORT/v1/components/signed-guard/1.0.0" \
+     | python3 -c 'import json,sys; print(json.load(sys.stdin)["signing_key_id"])')"
+
+# A manifest edited after signing is a different digest, so the signature stops
+# covering it. This is the difference between a signature and a decoration.
+sed 's/1\.0\.0/1.0.1/' "$WORK/signed-request.json" >"$WORK/tampered.json"
+check "an edited manifest is refused" 403 "$(post_component "$WORK/tampered.json")"
+
+# Revocation is blunt on purpose: a key is revoked because it is believed
+# compromised, so nothing it signed is trusted any more.
+"$ROOT/scripts/revoke-key.py" "$WORK/trusted-keys.json" acme-2026
+stop "$ADMIN_PID"
+ADMIN_PID=""
+start_signing_admin
+
+sed 's/signed-guard/revoked-guard/' "$WORK/signed-request.json" >"$WORK/revoked-request.json"
+check "a revoked key's signature no longer verifies" 403 \
+  "$(post_component "$WORK/revoked-request.json")"
+
 if [ "$fail" -ne 0 ]; then
   echo "admission check failed" >&2
   exit 1

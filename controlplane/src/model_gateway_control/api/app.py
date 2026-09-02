@@ -12,7 +12,7 @@ import json
 import secrets
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Annotated, Any
 
@@ -33,6 +33,7 @@ from model_gateway_control.domain.component import (
     Port,
 )
 from model_gateway_control.domain.identity import RateLimit
+from model_gateway_control.domain.signing import Signature, TrustStore
 from model_gateway_control.errors import (
     ConflictError,
     ForbiddenError,
@@ -68,6 +69,10 @@ class AdminSettings:
     #: Bearer token for the admin API. The in-process half of authentication;
     #: mTLS on the listener is the other half and is deployment configuration.
     admin_token: str
+    #: Publisher keys and how strictly signatures are enforced. Loaded from
+    #: configuration rather than the database, because a trust root the
+    #: database can change is not one.
+    trust: TrustStore = field(default_factory=TrustStore)
     now: Callable[[], datetime] | None = None
 
 
@@ -122,6 +127,23 @@ class RegisterComponentRequest(BaseModel):
     capabilities: list[str] = Field(default_factory=list)
     image: str = ""
     module: str = ""
+    #: The publisher's signature over this manifest's digest, base64, and the
+    #: key that produced it. Optional here and required by policy, so a
+    #: deployment can turn signing on after its publishers have keys rather
+    #: than before.
+    signing_key_id: str = ""
+    signature: str = ""
+
+    def to_signature(self) -> Signature | None:
+        """The submitted signature, or None when the request carries none.
+
+        Half a signature is treated as none rather than as an error: it proves
+        nothing either way, and the policy check that follows is what decides
+        whether proving nothing is allowed.
+        """
+        if not self.signing_key_id or not self.signature:
+            return None
+        return Signature.decode(self.signing_key_id, self.signature)
 
     def to_manifest(self) -> Manifest:
         return Manifest(
@@ -311,7 +333,9 @@ def create_app(settings: AdminSettings) -> FastAPI:
 
     @app.post("/v1/components", status_code=status.HTTP_201_CREATED, dependencies=[Authorized])
     async def register_component(body: RegisterComponentRequest, session: Session) -> Response:
-        component = await RegistryService(session).register(body.to_manifest())
+        component = await RegistryService(session, trust=settings.trust).register(
+            body.to_manifest(), body.to_signature()
+        )
         await session.commit()
         return _json_response(status.HTTP_201_CREATED, _component_json(component))
 
@@ -363,7 +387,9 @@ def create_app(settings: AdminSettings) -> FastAPI:
         served separately.
         """
         repo = Repository(session)
-        snapshot = build_snapshot(await repo.load_fleet(), await repo.load_tenants(), now())
+        snapshot = build_snapshot(
+            await repo.load_fleet(), await repo.load_tenants(), now(), settings.trust
+        )
         return _json_response(
             status.HTTP_200_OK,
             {
@@ -389,7 +415,9 @@ def create_app(settings: AdminSettings) -> FastAPI:
         exists.
         """
         repo = Repository(session)
-        snapshot = build_snapshot(await repo.load_fleet(), await repo.load_tenants(), now())
+        snapshot = build_snapshot(
+            await repo.load_fleet(), await repo.load_tenants(), now(), settings.trust
+        )
         return Response(
             content=snapshot.SerializeToString(deterministic=True),
             media_type="application/x-protobuf",
@@ -414,6 +442,11 @@ def _component_json(component: Component) -> dict[str, Any]:
         "capabilities": list(manifest.capabilities),
         "image": manifest.image,
         "module": manifest.module,
+        # Who vouched for this, as evidence rather than as a verdict: the
+        # signature is here so it can be re-checked, and the snapshot builder
+        # does exactly that before binding the component.
+        "signing_key_id": component.signature.key_id if component.signature else "",
+        "signature": component.signature.encoded() if component.signature else "",
         "admission": None
         if admission is None
         else {

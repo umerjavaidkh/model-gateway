@@ -35,6 +35,7 @@ from model_gateway_control.domain.catalog import (
 from model_gateway_control.domain.component import Component, Port, Registry
 from model_gateway_control.domain.identity import BudgetRef, Principal
 from model_gateway_control.domain.policy import PolicyBundle, PolicyEffect
+from model_gateway_control.domain.signing import TrustStore
 from model_gateway_control.domain.tenant import (
     FailureMode,
     Fleet,
@@ -76,14 +77,27 @@ _BUDGET_SCOPES = {
 }
 
 
-def build_snapshot(fleet: Fleet, tenants: list[Tenant], built_at: datetime) -> pb.Snapshot:
+def build_snapshot(
+    fleet: Fleet,
+    tenants: list[Tenant],
+    built_at: datetime,
+    trust: TrustStore | None = None,
+) -> pb.Snapshot:
     """Compile a full snapshot and seal every layer with its digest.
 
     Validation happens before anything is encoded, so a snapshot that exists is
     coherent and the data plane's own validation never has to be the first line
     of defence.
+
+    ``trust`` is where publisher signatures are actually enforced. Registration
+    checks them too, but that check leaves behind a row, and a row is what an
+    attacker with a database has; this one re-derives the answer from keys that
+    live in configuration. Defaulting to an empty store means an unsigned
+    component still builds, while a *signed* one fails — loudly — because a
+    signature nobody can check must never pass for a valid one.
     """
-    _validate(fleet, tenants)
+    trust = trust or TrustStore()
+    _validate(fleet, tenants, trust)
 
     message = pb.Snapshot()
     message.global_layer.CopyFrom(encode_fleet(fleet, tenants, built_at))
@@ -96,7 +110,7 @@ def build_snapshot(fleet: Fleet, tenants: list[Tenant], built_at: datetime) -> p
     return message
 
 
-def _validate(fleet: Fleet, tenants: list[Tenant]) -> None:
+def _validate(fleet: Fleet, tenants: list[Tenant], trust: TrustStore) -> None:
     """Reject a configuration that would build cleanly and then misbehave."""
     routes = {d.key for d in fleet.deployments}
 
@@ -134,9 +148,9 @@ def _validate(fleet: Fleet, tenants: list[Tenant]) -> None:
             seen_prefixes[prefix] = tenant.id
 
         _validate_tenant(tenant)
-        _validate_bindings(fleet.registry, tenant.id, tenant.plugins, tenant.guardrails)
+        _validate_bindings(fleet.registry, tenant.id, tenant.plugins, tenant.guardrails, trust)
 
-    _validate_bindings(fleet.registry, None, fleet.default_plugins, fleet.default_guardrails)
+    _validate_bindings(fleet.registry, None, fleet.default_plugins, fleet.default_guardrails, trust)
 
 
 def _validate_bindings(
@@ -144,6 +158,7 @@ def _validate_bindings(
     tenant: str | None,
     plugins: Sequence[PluginBinding],
     guardrails: Sequence[GuardrailBinding],
+    trust: TrustStore,
 ) -> None:
     """Reject a binding the registry cannot vouch for.
 
@@ -156,15 +171,16 @@ def _validate_bindings(
     where = f"tenant {tenant!r}" if tenant is not None else "the fleet defaults"
 
     for plugin in plugins:
-        _require_bindable(
-            _resolve(registry, plugin.port, plugin.component, plugin.version, where), where
-        )
+        component = _resolve(registry, plugin.port, plugin.component, plugin.version, where)
+        _require_bindable(component, where)
+        _require_signature(component, where, trust)
 
     for guardrail in guardrails:
         component = _resolve(
             registry, Port.GUARDRAIL, guardrail.component, guardrail.version, where
         )
         _require_bindable(component, where)
+        _require_signature(component, where, trust)
 
         declared = component.manifest.latency_budget_ms
         if declared and guardrail.timeout_ms < declared:
@@ -191,6 +207,26 @@ def _require_bindable(component: Component, where: str) -> None:
         f"{where} binds {component.manifest.ref}, which is {component.status} — "
         f"only an admitted, active component can enter a snapshot"
     )
+
+
+def _require_signature(component: Component, where: str, trust: TrustStore) -> None:
+    """Re-derive whether a component's publisher signature holds.
+
+    Not a lookup of what registration decided. Registration's answer lives in
+    the database, and so does the status that says a component is bindable; if
+    both came from there, an attacker who could write one could write the
+    other. This recomputes the signature against keys that came from
+    configuration, so getting a forged component into a snapshot takes the
+    trusted-keys file and not just the database.
+
+    It is also where revocation takes effect: a key revoked because it is
+    believed compromised stops verifying, so its components leave the fleet on
+    the next snapshot rather than whenever someone remembers to retire them.
+    """
+    try:
+        trust.verify(component.manifest.digest(), component.signature)
+    except GatewayError as exc:
+        raise InvalidRequestError(f"{where} binds {component.manifest.ref}: {exc.message}") from exc
 
 
 def _validate_tenant(tenant: Tenant) -> None:

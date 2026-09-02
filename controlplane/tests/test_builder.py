@@ -10,11 +10,27 @@ from __future__ import annotations
 import dataclasses
 
 import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 from model_gateway_control.domain.budget import Budget, BudgetScope
 from model_gateway_control.domain.catalog import ModelAlias, RoutingKey, TrustTier
-from model_gateway_control.domain.component import Execution, Port, Registry, Status
+from model_gateway_control.domain.component import (
+    Component,
+    Execution,
+    Manifest,
+    Port,
+    Registry,
+    Status,
+    admitted,
+)
 from model_gateway_control.domain.identity import BudgetRef, Principal
+from model_gateway_control.domain.signing import (
+    KeyStatus,
+    PublisherKey,
+    TrustStore,
+    sign,
+)
 from model_gateway_control.domain.tenant import Fleet, Tenant
 from model_gateway_control.errors import InvalidRequestError
 from model_gateway_control.snapshot import build_snapshot, seal
@@ -513,3 +529,100 @@ def test_a_control_plane_component_cannot_be_bound_into_a_snapshot(
 
     with pytest.raises(InvalidRequestError, match="do not run in the data plane"):
         build_snapshot(registered, [dataclasses.replace(tenant, plugins=())], BUILT_AT)
+
+
+# --- publisher signatures ---------------------------------------------------
+
+
+def _signed_component(name: str, key_id: str) -> tuple[Component, PublisherKey]:
+    """An admitted guardrail whose manifest is signed by a fresh key."""
+    private = Ed25519PrivateKey.generate()
+    public = private.public_key().public_bytes(encoding=Encoding.Raw, format=PublicFormat.Raw)
+    key = PublisherKey(key_id=key_id, publisher="ACME", public_key=public)
+
+    manifest = Manifest(name=name, version="1.0.0", port=Port.GUARDRAIL, latency_budget_ms=50)
+    component = admitted(
+        manifest,
+        suite_version="1",
+        runner="test",
+        signature=sign(manifest.digest(), private, key_id),
+    )
+    return component, key
+
+
+def _bound(fleet: Fleet, tenant: Tenant, component: Component) -> tuple[Fleet, Tenant]:
+    from model_gateway_control.domain.tenant import GuardrailBinding
+
+    return (
+        dataclasses.replace(fleet, registry=Registry((component,)), default_plugins=()),
+        dataclasses.replace(
+            tenant,
+            plugins=(),
+            guardrails=(GuardrailBinding(component=component.manifest.name, timeout_ms=50),),
+        ),
+    )
+
+
+def test_a_snapshot_rechecks_the_signature_rather_than_trusting_the_registry(
+    fleet: Fleet, tenant: Tenant
+) -> None:
+    # Registration verified this too, but registration's answer lives in the
+    # database — and so does the status that says a component is bindable. If
+    # both came from there, whoever could write one could write the other.
+    component, key = _signed_component("acme-guard", "acme-2026")
+    bound_fleet, bound_tenant = _bound(fleet, tenant, component)
+
+    snapshot = build_snapshot(bound_fleet, [bound_tenant], BUILT_AT, TrustStore(keys=(key,)))
+
+    assert snapshot.tenants[0].guardrails[0].component == "acme-guard"
+
+
+def test_a_component_whose_signature_does_not_verify_cannot_be_bound(
+    fleet: Fleet, tenant: Tenant
+) -> None:
+    # The check that actually gates production: getting a forged component into
+    # a snapshot takes the trusted-keys file, not just the database.
+    component, _ = _signed_component("acme-guard", "acme-2026")
+    _, someone_else = _signed_component("other", "acme-2026")
+    bound_fleet, bound_tenant = _bound(fleet, tenant, component)
+
+    with pytest.raises(InvalidRequestError, match="does not match this manifest"):
+        build_snapshot(bound_fleet, [bound_tenant], BUILT_AT, TrustStore(keys=(someone_else,)))
+
+
+def test_revoking_a_key_takes_its_components_out_of_the_next_snapshot(
+    fleet: Fleet, tenant: Tenant
+) -> None:
+    # A key is revoked because it is believed compromised, and its components
+    # are exactly the ones that must stop running — not whenever an operator
+    # remembers to retire them one by one.
+    component, key = _signed_component("acme-guard", "acme-2026")
+    bound_fleet, bound_tenant = _bound(fleet, tenant, component)
+    revoked = dataclasses.replace(key, status=KeyStatus.REVOKED)
+
+    with pytest.raises(InvalidRequestError, match="revoked"):
+        build_snapshot(bound_fleet, [bound_tenant], BUILT_AT, TrustStore(keys=(revoked,)))
+
+
+def test_a_signed_component_fails_loudly_when_no_keys_are_configured(
+    fleet: Fleet, tenant: Tenant
+) -> None:
+    # A signature nobody can check must never pass for a valid one. Failing
+    # here is a misconfiguration an operator can see; passing would be a
+    # security control that silently is not one.
+    component, _ = _signed_component("acme-guard", "acme-2026")
+    bound_fleet, bound_tenant = _bound(fleet, tenant, component)
+
+    with pytest.raises(InvalidRequestError, match="not a trusted publisher key"):
+        build_snapshot(bound_fleet, [bound_tenant], BUILT_AT)
+
+
+def test_an_unsigned_component_still_builds_when_signatures_are_optional(
+    fleet: Fleet, tenant: Tenant
+) -> None:
+    unsigned = guardrail_component("plain-guard", "1.0.0")
+    bound_fleet, bound_tenant = _bound(fleet, tenant, unsigned)
+
+    snapshot = build_snapshot(bound_fleet, [bound_tenant], BUILT_AT, TrustStore())
+
+    assert snapshot.tenants[0].guardrails[0].component == "plain-guard"

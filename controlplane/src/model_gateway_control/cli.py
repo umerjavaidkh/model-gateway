@@ -9,12 +9,22 @@ database: a test needs a deterministic artifact, not a deployment.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import sys
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.serialization import (
+    Encoding,
+    NoEncryption,
+    PrivateFormat,
+    PublicFormat,
+    load_pem_private_key,
+)
 
 from model_gateway_control.domain.budget import Budget, BudgetScope
 from model_gateway_control.domain.catalog import (
@@ -34,6 +44,8 @@ from model_gateway_control.domain.component import (
 )
 from model_gateway_control.domain.identity import BudgetRef, Principal, RateLimit, issue_key
 from model_gateway_control.domain.policy import PolicyBundle, PolicyEffect, PolicyRule
+from model_gateway_control.domain.signing import KeyStatus
+from model_gateway_control.domain.signing import sign as sign_digest
 from model_gateway_control.domain.tenant import (
     FailureMode,
     Fleet,
@@ -60,10 +72,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     digest.add_argument("--manifest", type=Path, required=True, help="JSON manifest")
 
+    keygen = sub.add_parser("keygen", help="generate an Ed25519 publisher signing key")
+    keygen.add_argument("--key-id", required=True, help="how the trust store will name this key")
+    keygen.add_argument("--publisher", required=True, help="who holds it")
+    keygen.add_argument("--out", type=Path, required=True, help="file to write the private key to")
+
+    sign = sub.add_parser("sign-manifest", help="sign a component manifest for submission")
+    sign.add_argument("--manifest", type=Path, required=True, help="JSON manifest")
+    sign.add_argument("--key", type=Path, required=True, help="private key from keygen")
+    sign.add_argument("--key-id", required=True, help="the id the trust store knows this key by")
+
     args = parser.parse_args(argv)
     try:
         if args.command == "component-digest":
             return _component_digest(args.manifest)
+        if args.command == "keygen":
+            return _keygen(args.key_id, args.publisher, args.out)
+        if args.command == "sign-manifest":
+            return _sign_manifest(args.manifest, args.key, args.key_id)
         return _build_snapshot(args.config, args.out, args.pepper)
     except GatewayError as err:
         print(f"gatewayctl: {err}", file=sys.stderr)
@@ -81,6 +107,62 @@ def _component_digest(manifest_path: Path) -> int:
     manifest = manifest_from_dict(json.loads(manifest_path.read_text()))
     print(manifest.digest())
     print(f"  {manifest.ref} fills {manifest.port}, {manifest.execution}", file=sys.stderr)
+    return 0
+
+
+def _keygen(key_id: str, publisher: str, out: Path) -> int:
+    """Generate a signing key and print the trust-store entry for its public half.
+
+    The private key is written with owner-only permissions and never printed:
+    a key that appears in a terminal is a key in a scrollback buffer, a shell
+    history file, and whatever collects the CI logs.
+    """
+    if out.exists():
+        # Overwriting a signing key silently is how a publisher discovers that
+        # everything they signed last year can no longer be attributed.
+        raise InvalidRequestError(f"{out} already exists; refusing to overwrite a signing key")
+
+    private = Ed25519PrivateKey.generate()
+    out.write_bytes(
+        private.private_bytes(
+            encoding=Encoding.PEM,
+            format=PrivateFormat.PKCS8,
+            encryption_algorithm=NoEncryption(),
+        )
+    )
+    out.chmod(0o600)
+
+    public = private.public_key().public_bytes(encoding=Encoding.Raw, format=PublicFormat.Raw)
+    entry = {
+        "key_id": key_id,
+        "publisher": publisher,
+        "public_key": base64.b64encode(public).decode(),
+        "status": str(KeyStatus.ACTIVE),
+    }
+    print(json.dumps({"keys": [entry]}, indent=2))
+    print(
+        f"  private key written to {out} (0600); add the block above to the trust store",
+        file=sys.stderr,
+    )
+    return 0
+
+
+def _sign_manifest(manifest_path: Path, key_path: Path, key_id: str) -> int:
+    """Sign a manifest's digest and print what a registration request needs.
+
+    The manifest is parsed and validated first, so a publisher signs something
+    the control plane will accept rather than discovering a schema error after
+    the signature is already circulating.
+    """
+    manifest = manifest_from_dict(json.loads(manifest_path.read_text()))
+
+    loaded = load_pem_private_key(key_path.read_bytes(), password=None)
+    if not isinstance(loaded, Ed25519PrivateKey):
+        raise InvalidRequestError(f"{key_path} is not an Ed25519 private key")
+
+    signature = sign_digest(manifest.digest(), loaded, key_id)
+    print(json.dumps({"signing_key_id": key_id, "signature": signature.encoded()}, indent=2))
+    print(f"  covers {manifest.ref} at digest {manifest.digest()}", file=sys.stderr)
     return 0
 
 

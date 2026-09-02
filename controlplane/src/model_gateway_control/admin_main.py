@@ -13,6 +13,7 @@ import uvicorn
 
 from model_gateway_control.api.app import AdminSettings, create_app
 from model_gateway_control.db.session import create_engine
+from model_gateway_control.domain.signing import Policy, TrustStore
 from model_gateway_control.errors import InvalidRequestError
 
 DEFAULT_PORT = 8081
@@ -40,8 +41,28 @@ def main() -> int:
             f"GATEWAY_ADMIN_TOKEN must be at least {MIN_TOKEN_LENGTH} characters"
         )
 
+    # The trust root is a file, and it is read here rather than from the
+    # database on purpose: a signature checked against keys the database could
+    # change would prove only that the database agrees with itself.
+    trust = TrustStore()
+    keys_path = os.environ.get("GATEWAY_TRUSTED_KEYS", "")
+    policy = Policy(os.environ.get("GATEWAY_SIGNATURE_POLICY", Policy.OPTIONAL))
+    if keys_path:
+        trust = TrustStore.from_file(keys_path, policy)
+    elif policy is Policy.REQUIRED:
+        # Every registration and every snapshot build would fail, and it would
+        # look like the software being broken rather than like a missing file.
+        raise InvalidRequestError(
+            "GATEWAY_SIGNATURE_POLICY is 'required' but GATEWAY_TRUSTED_KEYS is not set"
+        )
+
     app = create_app(
-        AdminSettings(engine=create_engine(database_url), key_pepper=pepper, admin_token=token)
+        AdminSettings(
+            engine=create_engine(database_url),
+            key_pepper=pepper,
+            admin_token=token,
+            trust=trust,
+        )
     )
     uvicorn.run(
         app,

@@ -11,6 +11,8 @@ from collections.abc import AsyncIterator
 
 import pytest
 import pytest_asyncio
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from model_gateway_control.db.models import Base
@@ -22,6 +24,13 @@ from model_gateway_control.domain.component import (
     Manifest,
     Port,
     Status,
+)
+from model_gateway_control.domain.signing import (
+    KeyStatus,
+    Policy,
+    PublisherKey,
+    TrustStore,
+    sign,
 )
 from model_gateway_control.errors import ConflictError, ForbiddenError, NotFoundError
 from model_gateway_control.service.registry import AdmissionGate, RegistryService
@@ -255,3 +264,74 @@ async def test_what_the_service_writes_is_what_the_snapshot_builder_reads(
     assert resolved.is_admitted
     assert resolved.manifest.capabilities == ("network",)
     assert resolved.manifest.digest() == MANIFEST.digest()
+
+
+# --- publisher signatures ---------------------------------------------------
+
+
+def _keypair(status: KeyStatus = KeyStatus.ACTIVE) -> tuple[Ed25519PrivateKey, PublisherKey]:
+    private = Ed25519PrivateKey.generate()
+    public = private.public_key().public_bytes(encoding=Encoding.Raw, format=PublicFormat.Raw)
+    return private, PublisherKey(
+        key_id="acme-2026", publisher="ACME", public_key=public, status=status
+    )
+
+
+async def test_a_signature_survives_registration_so_it_can_be_rechecked(
+    session: AsyncSession,
+) -> None:
+    # Stored as evidence, not as a verdict. The snapshot builder re-derives the
+    # answer from the configured keys, which is only possible if the signature
+    # itself is kept.
+    private, key = _keypair()
+    signature = sign(MANIFEST.digest(), private, key.key_id)
+    service = RegistryService(session, trust=TrustStore(keys=(key,)))
+
+    await service.register(MANIFEST, signature)
+    stored = await service.get(MANIFEST.name, MANIFEST.version)
+
+    assert stored.signature is not None
+    assert stored.signature.key_id == key.key_id
+    assert stored.signature.value == signature.value
+
+
+async def test_a_forged_signature_is_refused_at_registration(session: AsyncSession) -> None:
+    # A clear error while a publisher is watching, rather than a component that
+    # registers cleanly and then fails every snapshot build.
+    stranger = Ed25519PrivateKey.generate()
+    _, key = _keypair()
+    service = RegistryService(session, trust=TrustStore(keys=(key,)))
+
+    with pytest.raises(ForbiddenError, match="does not match this manifest"):
+        await service.register(MANIFEST, sign(MANIFEST.digest(), stranger, key.key_id))
+
+    with pytest.raises(NotFoundError):
+        await service.get(MANIFEST.name, MANIFEST.version)
+
+
+async def test_an_unsigned_component_is_refused_when_signatures_are_required(
+    session: AsyncSession,
+) -> None:
+    _, key = _keypair()
+    service = RegistryService(session, trust=TrustStore(keys=(key,), policy=Policy.REQUIRED))
+
+    with pytest.raises(ForbiddenError, match="requires a publisher signature"):
+        await service.register(MANIFEST)
+
+
+async def test_a_retired_key_cannot_register_anything_new(session: AsyncSession) -> None:
+    private, key = _keypair(status=KeyStatus.RETIRED)
+    service = RegistryService(session, trust=TrustStore(keys=(key,)))
+
+    with pytest.raises(ForbiddenError, match="retired"):
+        await service.register(MANIFEST, sign(MANIFEST.digest(), private, key.key_id))
+
+
+async def test_a_deployment_with_no_keys_still_registers_unsigned_components(
+    session: AsyncSession,
+) -> None:
+    # The default has to keep working, or turning signing on becomes a
+    # prerequisite for using the registry at all.
+    component = await RegistryService(session).register(MANIFEST)
+
+    assert component.signature is None
