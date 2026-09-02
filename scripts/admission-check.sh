@@ -60,6 +60,20 @@ admin() { curl -s -H "Authorization: Bearer $ADMIN_TOKEN" "$@"; }
 IMAGE_CONFORMING="$IMAGE"
 IMAGE_DENY_ALL="$IMAGE"
 
+# The identity the sandbox will run the component as, mirroring
+# internal/sandbox's componentUser: the runner's own uid so it owns the socket
+# it has to connect to, and nobody when the runner is root.
+#
+# The probe has to use the same one. Probing as a different user answers a
+# different question and gets a different answer.
+component_user() {
+  if [ "$(id -u)" = 0 ]; then
+    echo "65534:65534"
+  else
+    echo "$(id -u):$(id -g)"
+  fi
+}
+
 # Whether the host can reach a socket a container bound on a bind mount.
 #
 # It cannot on Docker Desktop for macOS: the mount crosses a VM boundary that
@@ -74,7 +88,7 @@ socket_crosses_the_mount() {
   sock="$dir/probe.sock"
 
   docker run --rm -d --name gw-uds-probe \
-    -v "$dir:/s" --user 65534:65534 \
+    -v "$dir:/s" --user "$(component_user)" \
     -e COMPONENT_SOCKET=/s/probe.sock "$1" >/dev/null 2>&1 || {
     rm -rf "$dir"
     return 1
@@ -111,7 +125,8 @@ if [ "$USING_DOCKER" = yes ]; then
     IMAGE_CONFORMING="$IMAGE"
     IMAGE_DENY_ALL="$IMAGE"
     echo "  this host cannot reach a container's socket over a bind mount" \
-      "(Docker Desktop does not proxy them); using the stub runtime"
+      "(Docker Desktop crosses a VM boundary that does not proxy them);" \
+      "using the stub runtime"
   fi
 fi
 
