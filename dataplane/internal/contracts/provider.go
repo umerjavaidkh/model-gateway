@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"testing"
 	"time"
 
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/core"
@@ -13,18 +12,18 @@ import (
 // ProviderFactory builds the implementation under test. It is a factory rather
 // than a single instance so the suite can assert on a freshly constructed
 // adapter where that matters.
-type ProviderFactory func(t *testing.T) core.ProviderPort
+type ProviderFactory func(t T) core.ProviderPort
 
 // SampleCall is a call the implementation is expected to be able to serve. Each
 // adapter supplies its own, because a valid body is provider-shaped.
-type SampleCall func(t *testing.T) *core.ProviderCall
+type SampleCall func(t T) *core.ProviderCall
 
 // RunProviderSuite asserts the behaviour every ProviderPort must have,
 // regardless of which upstream it speaks to.
-func RunProviderSuite(t *testing.T, newPort ProviderFactory, sample SampleCall) {
+func RunProviderSuite(t T, newPort ProviderFactory, sample SampleCall) {
 	t.Helper()
 
-	t.Run("reports a stable non-empty name", func(t *testing.T) {
+	t.Run("reports a stable non-empty name", func(t T) {
 		port := newPort(t)
 		if port.Name() == "" {
 			t.Fatal("Name must be non-empty: it is the key a snapshot binds the port by")
@@ -35,7 +34,7 @@ func RunProviderSuite(t *testing.T, newPort ProviderFactory, sample SampleCall) 
 		}
 	})
 
-	t.Run("declares at least one endpoint", func(t *testing.T) {
+	t.Run("declares at least one endpoint", func(t T) {
 		// An adapter serving no surface can never be routed to, which is a
 		// wiring bug that would otherwise show up as an unexplained 404.
 		port := newPort(t)
@@ -49,7 +48,7 @@ func RunProviderSuite(t *testing.T, newPort ProviderFactory, sample SampleCall) 
 		}
 	})
 
-	t.Run("probe does not consume tokens", func(t *testing.T) {
+	t.Run("probe does not consume tokens", func(t T) {
 		// A probe that ran a completion would bill the tenant for the
 		// gateway's own monitoring, once per interval, per deployment. There
 		// is no way to assert "no tokens" generically, so what is asserted is
@@ -69,7 +68,7 @@ func RunProviderSuite(t *testing.T, newPort ProviderFactory, sample SampleCall) 
 		}
 	})
 
-	t.Run("invoke returns a response", func(t *testing.T) {
+	t.Run("invoke returns a response", func(t T) {
 		port := newPort(t)
 		resp, err := port.Invoke(t.Context(), sample(t))
 		if err != nil {
@@ -80,7 +79,7 @@ func RunProviderSuite(t *testing.T, newPort ProviderFactory, sample SampleCall) 
 		}
 	})
 
-	t.Run("stream terminates with io.EOF", func(t *testing.T) {
+	t.Run("stream terminates with io.EOF", func(t T) {
 		port := newPort(t)
 		stream, err := port.Stream(t.Context(), sample(t))
 		if err != nil {
@@ -117,7 +116,7 @@ func RunProviderSuite(t *testing.T, newPort ProviderFactory, sample SampleCall) 
 		}
 	})
 
-	t.Run("close is idempotent", func(t *testing.T) {
+	t.Run("close is idempotent", func(t T) {
 		// The response pipeline closes on its own error paths as well as after
 		// io.EOF, so a double Close must not panic or error.
 		port := newPort(t)
@@ -133,7 +132,7 @@ func RunProviderSuite(t *testing.T, newPort ProviderFactory, sample SampleCall) 
 		}
 	})
 
-	t.Run("respects a cancelled context", func(t *testing.T) {
+	t.Run("respects a cancelled context", func(t T) {
 		// The router shares one deadline budget across every attempt, so an
 		// adapter that ignores cancellation can outlive the client's timeout.
 		port := newPort(t)
@@ -145,7 +144,7 @@ func RunProviderSuite(t *testing.T, newPort ProviderFactory, sample SampleCall) 
 		}
 	})
 
-	t.Run("does not exceed a short deadline", func(t *testing.T) {
+	t.Run("does not exceed a short deadline", func(t T) {
 		port := newPort(t)
 		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 		defer cancel()

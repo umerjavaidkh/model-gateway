@@ -81,7 +81,7 @@ jobs:
         run: git diff --exit-code || { echo "::error::run 'make proto' and commit the result"; exit 1; }
 
   crosslanguage:
-    name: Cross-language and live subscription
+    name: Cross-language, live subscription and admission
     runs-on: ubuntu-latest
     services:
       redis:
@@ -114,6 +114,10 @@ jobs:
         env:
           # Exercises the Redis limiter path end to end, not only in unit tests.
           GATEWAY_TEST_REDIS_URL: redis://localhost:6379
+      # Neither half of the registry is worth much alone, and unit tests on
+      # either side cannot show the loop: the control plane's tests fake the
+      # verdict, and the runner's tests fake the control plane.
+      - run: ./scripts/admission-check.sh
 
   controlplane:
     name: Control plane (Python)

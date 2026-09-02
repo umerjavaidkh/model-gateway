@@ -27,7 +27,7 @@ func uniquePrefix() string {
 }
 
 func TestSatisfiesKVStoreOnAnEmulator(t *testing.T) {
-	contracts.RunKVStoreSuite(t, func(t *testing.T) contracts.KVTarget {
+	contracts.RunKVStoreSuite(contracts.Adapt(t), func(t contracts.T) contracts.KVTarget {
 		t.Helper()
 		server := miniredis.RunT(t)
 		store, err := rediskv.Open("redis://" + server.Addr())
@@ -53,7 +53,7 @@ func TestSatisfiesKVStoreOnARealServer(t *testing.T) {
 		t.Skip("set GATEWAY_TEST_REDIS_URL to run against a real server")
 	}
 
-	contracts.RunKVStoreSuite(t, func(t *testing.T) contracts.KVTarget {
+	contracts.RunKVStoreSuite(contracts.Adapt(t), func(t contracts.T) contracts.KVTarget {
 		t.Helper()
 		store, err := rediskv.Open(url)
 		if err != nil {

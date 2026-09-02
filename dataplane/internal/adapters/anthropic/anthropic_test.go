@@ -93,9 +93,9 @@ func TestSatisfiesProviderPort(t *testing.T) {
 		_, _ = io.WriteString(w, messageResponse)
 	})
 
-	contracts.RunProviderSuite(t,
-		func(*testing.T) core.ProviderPort { return anthropic.New() },
-		func(*testing.T) *core.ProviderCall { return callFor(u, `{"model":"reasoning","messages":[]}`) },
+	contracts.RunProviderSuite(contracts.Adapt(t),
+		func(contracts.T) core.ProviderPort { return anthropic.New() },
+		func(contracts.T) *core.ProviderCall { return callFor(u, `{"model":"reasoning","messages":[]}`) },
 	)
 }
 

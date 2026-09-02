@@ -10,7 +10,7 @@ import (
 )
 
 func TestSatisfiesKVStore(t *testing.T) {
-	contracts.RunKVStoreSuite(t, func(*testing.T) contracts.KVTarget {
+	contracts.RunKVStoreSuite(contracts.Adapt(t), func(contracts.T) contracts.KVTarget {
 		// A fresh store per case, and no prefix needed: nothing else shares it.
 		// The clock is hand-wound so expiry is exercised rather than waited for.
 		now := time.Now()

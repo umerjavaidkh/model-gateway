@@ -66,9 +66,9 @@ func TestSatisfiesProviderPort(t *testing.T) {
 		_, _ = io.WriteString(w, jsonResponse)
 	})
 
-	contracts.RunProviderSuite(t,
-		func(*testing.T) core.ProviderPort { return openaicompat.New() },
-		func(*testing.T) *core.ProviderCall { return callFor(u, `{"model":"fast","messages":[]}`) },
+	contracts.RunProviderSuite(contracts.Adapt(t),
+		func(contracts.T) core.ProviderPort { return openaicompat.New() },
+		func(contracts.T) *core.ProviderCall { return callFor(u, `{"model":"fast","messages":[]}`) },
 	)
 }
 
