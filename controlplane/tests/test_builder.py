@@ -13,7 +13,7 @@ import pytest
 
 from model_gateway_control.domain.budget import Budget, BudgetScope
 from model_gateway_control.domain.catalog import ModelAlias, RoutingKey, TrustTier
-from model_gateway_control.domain.component import Port, Registry, Status
+from model_gateway_control.domain.component import Execution, Port, Registry, Status
 from model_gateway_control.domain.identity import BudgetRef, Principal
 from model_gateway_control.domain.tenant import Fleet, Tenant
 from model_gateway_control.errors import InvalidRequestError
@@ -291,6 +291,47 @@ def test_guardrail_bindings_reach_the_snapshot(fleet: Fleet, tenant: Tenant) -> 
     assert bindings["secret-scan"].blocking is True
     assert bindings["secret-scan"].timeout_ms == 5
     assert bindings["injection-heuristics"].blocking is False
+
+
+def test_how_a_guardrail_runs_travels_with_the_binding(fleet: Fleet, tenant: Tenant) -> None:
+    # The snapshot is the worker's only source of configuration. A worker that
+    # had to ask the control plane how to run something it was already told to
+    # run would stop serving when the control plane was down.
+    from model_gateway_control.domain.tenant import GuardrailBinding
+
+    digest = "sha256:" + "a" * 64
+    registered = dataclasses.replace(
+        fleet,
+        registry=Registry(
+            (
+                guardrail_component(
+                    "wasm-guard",
+                    "1.0.0",
+                    execution=Execution.IN_PROCESS,
+                    module=digest,
+                ),
+                guardrail_component("side-guard", "1.0.0"),
+            )
+        ),
+        default_plugins=(),
+    )
+    guarded = dataclasses.replace(
+        tenant,
+        plugins=(),
+        guardrails=(
+            GuardrailBinding(component="wasm-guard", timeout_ms=50),
+            GuardrailBinding(component="side-guard", timeout_ms=50),
+        ),
+    )
+
+    snapshot = build_snapshot(registered, [guarded], BUILT_AT)
+    bindings = {g.component: g for g in snapshot.tenants[0].guardrails}
+
+    assert bindings["wasm-guard"].execution == "in_process"
+    assert bindings["wasm-guard"].module == digest
+    # A sidecar names no module, and a worker must not go looking for one.
+    assert bindings["side-guard"].execution == "sidecar"
+    assert bindings["side-guard"].module == ""
 
 
 def test_a_guardrail_needs_a_positive_timeout() -> None:

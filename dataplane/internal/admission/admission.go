@@ -15,13 +15,16 @@ package admission
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"time"
 
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/adapters/guardrailsidecar"
+	"github.com/umerjavaidkh/model-gateway/dataplane/internal/adapters/wasmguardrail"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/contracts"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/core"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/sandbox"
+	"github.com/umerjavaidkh/model-gateway/dataplane/internal/wasm"
 )
 
 // SuiteVersion identifies the battery that ran.
@@ -44,6 +47,13 @@ type Manifest struct {
 	Port    string `json:"port"`
 	Digest  string `json:"digest"`
 	Image   string `json:"image"`
+	// Module is the sha256 digest of the WASM module, for components that run
+	// in the worker's process.
+	Module string `json:"module"`
+	// Execution decides how the component is isolated, and therefore how this
+	// package runs it: a container for a sidecar, the WASM runtime itself for
+	// an in-process module.
+	Execution string `json:"execution"`
 	// LatencyBudgetMS is what the component claims it needs. The suite does not
 	// assert against it — a contract suite runs on a cold sandbox and would
 	// measure the sandbox — but it is recorded so a binding can be checked.
@@ -77,9 +87,20 @@ type Fixtures struct {
 	Benign  []byte `json:"benign"`
 }
 
+// ExecutionInProcess and ExecutionSidecar are the modes this package can run.
+//
+// Strings rather than an enum: they arrive as JSON from the control plane,
+// which owns the vocabulary, and a mode this runner does not recognise must be
+// refused rather than mapped onto a default.
+const (
+	ExecutionInProcess = "in_process"
+	ExecutionSidecar   = "sidecar"
+)
+
 // Runner runs suites against sandboxed components.
 type Runner struct {
 	sandbox sandbox.Runner
+	modules *wasm.ModuleStore
 	// name identifies this runner in the record. An auditor needs to be able
 	// to tell one sandbox host from another, and from the control plane.
 	name   string
@@ -94,19 +115,42 @@ func WithLimits(limits sandbox.Limits) Option {
 	return func(r *Runner) { r.limits = limits }
 }
 
-// NewRunner returns a Runner that launches components with the given sandbox.
-func NewRunner(name string, box sandbox.Runner, opts ...Option) (*Runner, error) {
+// WithModules lets the runner admit in-process components by telling it where
+// their WASM modules are. Without one, an in-process component is refused
+// rather than skipped, because a component nobody can test is not a component
+// that passed.
+func WithModules(store *wasm.ModuleStore) Option {
+	return func(r *Runner) { r.modules = store }
+}
+
+// WithSandbox lets the runner admit sidecar components by giving it a
+// container runtime to launch them in.
+func WithSandbox(box sandbox.Runner) Option {
+	return func(r *Runner) { r.sandbox = box }
+}
+
+// NewRunner returns a Runner.
+//
+// Both isolation mechanisms are optional, and a runner with neither is refused
+// rather than left to fail on its first component. A WASM-only deployment
+// genuinely needs no container runtime — not needing one is most of the point
+// of running a component in process — and a sidecar-only one needs no module
+// store, so requiring either would make one of those deployments carry
+// something it has no use for.
+func NewRunner(name string, opts ...Option) (*Runner, error) {
 	if name == "" {
 		return nil, core.New(core.CodeInvalidRequest,
 			"a runner must be named, so an admission says what produced it")
 	}
-	if box == nil {
-		return nil, core.New(core.CodeInvalidRequest, "a runner needs a sandbox")
-	}
 
-	runner := &Runner{sandbox: box, name: name}
+	runner := &Runner{name: name}
 	for _, opt := range opts {
 		opt(runner)
+	}
+	if runner.sandbox == nil && runner.modules == nil {
+		return nil, core.New(core.CodeInvalidRequest,
+			"a runner needs a sandbox, a module store, or both; with neither it "+
+				"can admit nothing")
 	}
 	return runner, nil
 }
@@ -134,6 +178,23 @@ func (r *Runner) Run(ctx context.Context, manifest Manifest, fixtures Fixtures) 
 		return Verdict{}, core.New(core.CodeInvalidRequest,
 			"a benign fixture is required; without it a guardrail that denies "+
 				"everything passes every assertion about denying")
+	}
+
+	// The isolation mechanism differs but the battery does not. Both paths
+	// return a core.GuardrailPort and the same suite decides.
+	switch manifest.Execution {
+	case ExecutionInProcess:
+		return r.runInProcess(ctx, manifest, fixtures)
+	case ExecutionSidecar, "":
+		// Empty means a control plane that predates this field, and sidecar is
+		// what it would have meant.
+		if r.sandbox == nil {
+			return Verdict{}, core.New(core.CodeInvalidRequest,
+				"this runner has no sandbox, so it cannot admit a sidecar component")
+		}
+	default:
+		return Verdict{}, core.Newf(core.CodeInvalidRequest,
+			"this runner cannot execute a %s component", manifest.Execution)
 	}
 
 	socketDir, err := os.MkdirTemp("", "gwadm")
@@ -192,15 +253,83 @@ func (r *Runner) Run(ctx context.Context, manifest Manifest, fixtures Fixtures) 
 		}
 	})
 
-	report := recorder.Report()
+	return r.verdictFrom(manifest, recorder.Report()), nil
+}
+
+// runInProcess admits a WASM component.
+//
+// There is no container here, and that is not a gap. A WASM module has no
+// ambient authority at all: it cannot open a file, dial a socket, or address
+// anything but its own linear memory. That is a stronger boundary than the
+// container the sidecar path uses, and unlike that one it does not rest on a
+// shared kernel — so the isolation this path skips is isolation it does not
+// need.
+func (r *Runner) runInProcess(
+	ctx context.Context, manifest Manifest, fixtures Fixtures,
+) (Verdict, error) {
+	if r.modules == nil {
+		return Verdict{}, core.New(core.CodeInvalidRequest,
+			"this runner has no module store, so it cannot admit an in-process component")
+	}
+
+	// Verified against the manifest, not trusted from a path. An admission
+	// record vouches for specific bytes.
+	wasmBytes, err := r.modules.Load(manifest.Module)
+	if err != nil {
+		return Verdict{}, err
+	}
+
+	runtime, err := wasm.NewRuntime(ctx, wasm.Limits{})
+	if err != nil {
+		return Verdict{}, err
+	}
+	defer func() { _ = runtime.Close(context.WithoutCancel(ctx)) }()
+
+	module, err := runtime.Compile(ctx, manifest.Name, wasmBytes)
+	if err != nil {
+		// A module that will not compile is a component that failed, not a run
+		// that could not happen: the bytes are the thing under test and they
+		// are right here.
+		return r.verdictFor(manifest, false,
+			fmt.Sprintf("the module does not compile or does not implement the ABI: %v", err)), nil
+	}
+	defer func() { _ = module.Close(context.WithoutCancel(ctx)) }()
+
+	guardrail, err := wasmguardrail.New(manifest.Name, module)
+	if err != nil {
+		return Verdict{}, err
+	}
+
+	recorder := contracts.NewRecorder(ctx, manifest.Name)
+	defer recorder.Finish()
+
+	contracts.RunGuardrailSuite(recorder, func(contracts.T) contracts.GuardrailTarget { //nolint:contextcheck
+		return contracts.GuardrailTarget{
+			Guardrail: guardrail,
+			Trigger:   fixtures.Trigger,
+			Benign:    fixtures.Benign,
+		}
+	})
+	return r.verdictFrom(manifest, recorder.Report()), nil
+}
+
+func (r *Runner) verdictFrom(manifest Manifest, report contracts.Report) Verdict {
+	verdict := r.verdictFor(manifest, report.Passed(), "")
+	verdict.Report = report.String()
+	return verdict
+}
+
+// verdictFor builds a verdict that did not come from a battery, for the case
+// where the component failed before one could run.
+func (r *Runner) verdictFor(manifest Manifest, passed bool, note string) Verdict {
 	return Verdict{
 		Suite:          manifest.Port,
 		SuiteVersion:   SuiteVersion,
 		ManifestDigest: manifest.Digest,
-		Passed:         report.Passed(),
+		Passed:         passed,
 		Runner:         r.name,
-		Report:         report.String(),
-	}, nil
+		Report:         note,
+	}
 }
 
 // callTimeout bounds one call to the component during a suite run.

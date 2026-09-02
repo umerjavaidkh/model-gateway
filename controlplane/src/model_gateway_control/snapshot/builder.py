@@ -88,7 +88,7 @@ def build_snapshot(fleet: Fleet, tenants: list[Tenant], built_at: datetime) -> p
     message = pb.Snapshot()
     message.global_layer.CopyFrom(encode_fleet(fleet, tenants, built_at))
     for tenant in tenants:
-        message.tenants.append(encode_tenant(tenant, built_at))
+        message.tenants.append(encode_tenant(tenant, built_at, fleet.registry))
 
     seal(message.global_layer)
     for layer in message.tenants:
@@ -233,7 +233,7 @@ def encode_fleet(fleet: Fleet, tenants: list[Tenant], built_at: datetime) -> pb.
     for binding in fleet.default_plugins:
         layer.default_plugins.append(_encode_plugin(binding))
     for guardrail in fleet.default_guardrails:
-        layer.default_guardrails.append(_encode_guardrail(guardrail))
+        layer.default_guardrails.append(_encode_guardrail(guardrail, fleet.registry))
     if fleet.default_policy is not None:
         layer.default_policy.CopyFrom(_encode_policy(fleet.default_policy))
 
@@ -245,8 +245,12 @@ def encode_fleet(fleet: Fleet, tenants: list[Tenant], built_at: datetime) -> pb.
     return layer
 
 
-def encode_tenant(tenant: Tenant, built_at: datetime) -> pb.TenantLayer:
-    """Encode one tenant's layer."""
+def encode_tenant(tenant: Tenant, built_at: datetime, registry: Registry) -> pb.TenantLayer:
+    """Encode one tenant's layer.
+
+    The registry is needed to say how each bound guardrail runs; see
+    _encode_guardrail for why that travels in the snapshot.
+    """
     layer = pb.TenantLayer(
         tenant=tenant.id,
         version=pb.LayerVersion(number=tenant.version),
@@ -267,7 +271,7 @@ def encode_tenant(tenant: Tenant, built_at: datetime) -> pb.TenantLayer:
     for binding in tenant.plugins:
         layer.plugins.append(_encode_plugin(binding))
     for guardrail in tenant.guardrails:
-        layer.guardrails.append(_encode_guardrail(guardrail))
+        layer.guardrails.append(_encode_guardrail(guardrail, registry))
     if tenant.policy is not None:
         layer.policy.CopyFrom(_encode_policy(tenant.policy))
     return layer
@@ -363,11 +367,24 @@ _FAILURE_MODES = {
 }
 
 
-def _encode_guardrail(g: GuardrailBinding) -> pb.GuardrailBinding:
+def _encode_guardrail(g: GuardrailBinding, registry: Registry) -> pb.GuardrailBinding:
+    # How the worker must run this component travels with the binding, because
+    # the snapshot is the worker's only source of configuration. A worker that
+    # had to ask the control plane how to run something it was already told to
+    # run would stop serving when the control plane was down.
+    #
+    # The registry has already vouched for every binding by this point, so the
+    # lookup cannot fail; it is done here rather than carried on the domain
+    # binding because the answer belongs to the component, not to the tenant
+    # that bound it.
+    manifest = registry.resolve(Port.GUARDRAIL, g.component, g.version).manifest
+
     return pb.GuardrailBinding(
         component=g.component,
         version=g.version,
         config_ref=g.config_ref,
+        execution=str(manifest.execution),
+        module=manifest.module,
         timeout_ms=g.timeout_ms,
         # An unmapped mode encodes as closed rather than unspecified. The data
         # plane reads an unrecognised mode as fail-closed too, so the safe

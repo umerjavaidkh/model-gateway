@@ -16,9 +16,22 @@ readonly ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 WORK="$(mktemp -d /tmp/nercheck.XXXXXX)"
 SIDECAR_PID=""
+# stop waits for a process to actually exit after asking it to.
+#
+# Without the wait, the rm below can race a process that has been signalled but
+# not yet reaped, and removing a directory holding its running executable fails
+# with a permission error. That turns a passing check into a failing one after
+# it has already printed that it passed, which is the worst way for a check to
+# be flaky.
+stop() {
+  [ -n "${1:-}" ] || return 0
+  kill "$1" 2>/dev/null || return 0
+  wait "$1" 2>/dev/null || true
+}
+
 cleanup() {
-  [ -n "$SIDECAR_PID" ] && kill "$SIDECAR_PID" 2>/dev/null || true
-  rm -rf "$WORK"
+  stop "$SIDECAR_PID"
+  rm -rf "$WORK" 2>/dev/null || echo "could not remove $WORK" >&2
 }
 trap cleanup EXIT
 

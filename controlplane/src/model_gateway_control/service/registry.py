@@ -111,6 +111,7 @@ class RegistryService:
             failure_mode=str(manifest.failure_mode),
             execution=str(manifest.execution),
             image=manifest.image,
+            module=manifest.module,
             capabilities=[models.ComponentCapability(name=c) for c in manifest.capabilities],
         )
         self._session.add(row)

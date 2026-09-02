@@ -18,6 +18,7 @@ from model_gateway_control.db.repository import Repository
 from model_gateway_control.db.session import create_engine, session_factory
 from model_gateway_control.domain.component import (
     Admission,
+    Execution,
     Manifest,
     Port,
     Status,
@@ -80,6 +81,29 @@ async def test_a_registered_component_is_not_yet_bindable(session: AsyncSession)
 
     assert component.status is Status.PENDING
     assert not component.is_bindable
+
+
+async def test_an_in_process_manifest_survives_the_round_trip(session: AsyncSession) -> None:
+    # The module digest is what a worker verifies the bytes against before
+    # compiling. A manifest that loses it on the way to the database would
+    # register cleanly and then fail to load on every worker.
+    manifest = Manifest(
+        name="wasm-guard",
+        version="1.0.0",
+        port=Port.GUARDRAIL,
+        latency_budget_ms=2000,
+        execution=Execution.IN_PROCESS,
+        module="sha256:" + "a" * 64,
+    )
+    service = RegistryService(session)
+    await service.register(manifest)
+
+    stored = await service.get("wasm-guard", "1.0.0")
+
+    assert stored.manifest.execution is Execution.IN_PROCESS
+    assert stored.manifest.module == manifest.module
+    # And the digest an admission binds to is the one the publisher submitted.
+    assert stored.manifest.digest() == manifest.digest()
 
 
 async def test_the_default_gate_admits_nothing(session: AsyncSession) -> None:

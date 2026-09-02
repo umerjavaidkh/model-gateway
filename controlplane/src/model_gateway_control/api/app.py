@@ -121,6 +121,7 @@ class RegisterComponentRequest(BaseModel):
     execution: Execution = Execution.SIDECAR
     capabilities: list[str] = Field(default_factory=list)
     image: str = ""
+    module: str = ""
 
     def to_manifest(self) -> Manifest:
         return Manifest(
@@ -133,6 +134,7 @@ class RegisterComponentRequest(BaseModel):
             execution=self.execution,
             capabilities=tuple(self.capabilities),
             image=self.image,
+            module=self.module,
         )
 
 
@@ -411,6 +413,7 @@ def _component_json(component: Component) -> dict[str, Any]:
         "execution": str(manifest.execution),
         "capabilities": list(manifest.capabilities),
         "image": manifest.image,
+        "module": manifest.module,
         "admission": None
         if admission is None
         else {

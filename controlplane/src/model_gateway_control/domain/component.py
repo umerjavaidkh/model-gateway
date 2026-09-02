@@ -143,6 +143,12 @@ class Manifest:
     #: floating tag turns an admitted artifact into a different one silently,
     #: which defeats the entire gate.
     image: str = ""
+    #: For in-process components, the digest of the WASM module. There is no
+    #: registry to pin against here — the artifact is a file — so the digest is
+    #: over the bytes themselves, and a worker verifies it before compiling
+    #: anything. Without that, the admission record vouches for one module and
+    #: the worker runs whatever is on disk.
+    module: str = ""
 
     def __post_init__(self) -> None:
         if not _NAME.match(self.name):
@@ -164,6 +170,23 @@ class Manifest:
         if self.execution is Execution.SIDECAR and self.image and not _pinned(self.image):
             raise InvalidRequestError(
                 f"component {self.name!r} pins {self.image!r} by tag; use an image digest"
+            )
+        if self.execution is Execution.IN_PROCESS:
+            # Required rather than optional: an in-process component with no
+            # module reference is one a worker cannot find, and it would fail
+            # at load on every worker rather than at registration on one.
+            if not self.module:
+                raise InvalidRequestError(
+                    f"component {self.name!r} runs in process and must name its module digest"
+                )
+            if not _DIGEST.match(self.module):
+                raise InvalidRequestError(
+                    f"component {self.name!r} has module {self.module!r}, "
+                    "which is not a sha256 digest of the module bytes"
+                )
+        elif self.module:
+            raise InvalidRequestError(
+                f"component {self.name!r} names a module but does not run in process"
             )
         _validate_config_schema(self.name, self.config_schema)
 
@@ -190,6 +213,7 @@ class Manifest:
                 "execution": str(self.execution),
                 "capabilities": sorted(self.capabilities),
                 "image": self.image,
+                "module": self.module,
             },
             sort_keys=True,
             separators=(",", ":"),
@@ -414,6 +438,7 @@ def manifest_from_dict(raw: dict[str, Any]) -> Manifest:
             execution=Execution(raw.get("execution", "sidecar")),
             capabilities=tuple(str(c) for c in raw.get("capabilities", ())),
             image=str(raw.get("image", "")),
+            module=str(raw.get("module", "")),
         )
     except KeyError as exc:
         raise InvalidRequestError(f"manifest is missing {exc.args[0]!r}") from exc

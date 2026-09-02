@@ -57,6 +57,7 @@ type Holder struct {
 	previous *generation
 
 	onRetire RetireFunc
+	onApply  ApplyFunc
 }
 
 // generation is one loaded snapshot together with its reference count.
@@ -107,6 +108,9 @@ func (g *generation) unref() {
 	})
 }
 
+// ApplyFunc is called with a snapshot before it starts serving.
+type ApplyFunc func(*core.Snapshot)
+
 // Option configures a Holder.
 type Option func(*Holder)
 
@@ -114,6 +118,24 @@ type Option func(*Holder)
 // draining. Exactly one callback is supported; the last one set wins.
 func OnRetire(fn RetireFunc) Option {
 	return func(h *Holder) { h.onRetire = fn }
+}
+
+// OnApply registers the callback invoked with a snapshot before it becomes
+// visible to requests.
+//
+// Before, not after: it is what loads the plugins a snapshot binds, and a
+// request that arrived between the swap and the load would find a binding
+// whose component is not there yet. It runs while the swap lock is held, so it
+// must not call back into the Holder, and it must be quick enough that
+// blocking other swaps is acceptable — loading a component is; anything
+// unbounded is not.
+//
+// It cannot fail the swap. A component whose artifact has not landed yet
+// leaves one binding unresolved, which the guardrail chain already handles;
+// refusing the whole configuration would make every rollout wait on file
+// distribution finishing first.
+func OnApply(fn ApplyFunc) Option {
+	return func(h *Holder) { h.onApply = fn }
 }
 
 // New returns a Holder serving initial.
@@ -188,6 +210,10 @@ func (h *Holder) Swap(next *core.Snapshot) error {
 	cur := h.current.Load()
 	if err := checkMonotonic(cur.snap, next); err != nil {
 		return err
+	}
+
+	if h.onApply != nil {
+		h.onApply(next)
 	}
 
 	displaced := h.previous

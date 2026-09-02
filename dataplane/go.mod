@@ -8,6 +8,7 @@ require (
 	github.com/alicebob/miniredis/v2 v2.38.0
 	github.com/google/go-cmp v0.7.0
 	github.com/redis/go-redis/v9 v9.22.0
+	github.com/tetratelabs/wazero v1.12.0
 	go.opentelemetry.io/otel v1.46.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.46.0
 	go.opentelemetry.io/otel/sdk v1.46.0

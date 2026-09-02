@@ -19,3 +19,4 @@ dist/
 snapshot.pb
 coverage.out
 coverage.raw
+build/

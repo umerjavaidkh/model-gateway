@@ -21,6 +21,7 @@ from model_gateway_control.domain.catalog import (
 )
 from model_gateway_control.domain.component import (
     Component,
+    Execution,
     Manifest,
     Port,
     Registry,
@@ -42,7 +43,13 @@ ROUTE_ADAPTER = RoutingKey(base_model="llama-3.3-70b", adapter_id="triage-v3")
 ROUTE_GPT = RoutingKey(base_model="gpt-4o-mini")
 
 
-def guardrail_component(name: str, version: str, latency_budget_ms: int = 50) -> Component:
+def guardrail_component(
+    name: str,
+    version: str,
+    latency_budget_ms: int = 50,
+    execution: Execution = Execution.SIDECAR,
+    module: str = "",
+) -> Component:
     """An admitted guardrail component, for fixtures that only need a binding to resolve."""
     return admitted(
         Manifest(
@@ -50,6 +57,8 @@ def guardrail_component(name: str, version: str, latency_budget_ms: int = 50) ->
             version=version,
             port=Port.GUARDRAIL,
             latency_budget_ms=latency_budget_ms,
+            execution=execution,
+            module=module,
         ),
         suite_version="1",
         runner="test",

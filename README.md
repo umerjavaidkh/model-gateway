@@ -42,6 +42,7 @@ dataplane/          Go. The request path: auth -> admit -> route -> adapt.
   cmd/admissionrunner/ Runs a contract suite against a component, off both planes.
   internal/contracts/ Per-port contract suites; also the plugin admission gate.
   internal/sandbox/   Container isolation for running a component nobody has vetted.
+  internal/wasm/      The other isolation: a WASM runtime with no ambient authority.
   internal/admission/ Runs a suite in a sandbox and reports a verdict it cannot act on.
   internal/adapters/  Concrete port implementations.
 controlplane/       Python. Registry, identity, policy authoring, snapshot compilation.
@@ -175,5 +176,6 @@ decided and why.
 | M9b — NER sidecar for names, locations and organisations | **done** |
 | M10a — Component registry: manifests, admission records, binding gate | **done** |
 | M10b — Sandboxed contract-test runner and the sidecar protocol | **done** |
-| M10c — WASM in-process components, signed manifests | next |
+| M10c — WASM in-process components | **done** |
+| M10d — Signed manifests | next |
 | M11+ — Fine-tuning | |

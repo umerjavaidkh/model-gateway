@@ -36,6 +36,7 @@ import (
 
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/admission"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/sandbox"
+	"github.com/umerjavaidkh/model-gateway/dataplane/internal/wasm"
 )
 
 const (
@@ -52,6 +53,7 @@ type options struct {
 	evidence     string
 	reportDir    string
 	runtime      string
+	moduleDir    string
 	runnerName   string
 	timeout      time.Duration
 	dryRun       bool
@@ -82,6 +84,8 @@ func parseFlags() options {
 	flag.StringVar(&opts.reportDir, "report-dir", ".", "directory to write the report into")
 	flag.StringVar(&opts.runtime, "runtime", sandbox.DefaultRuntime,
 		"container runtime; use a VM-isolated one for genuinely untrusted code")
+	flag.StringVar(&opts.moduleDir, "module-dir", os.Getenv("GATEWAY_WASM_DIR"),
+		"directory of WASM modules, named by digest; required for in-process components")
 	flag.StringVar(&opts.runnerName, "runner", defaultRunnerName(),
 		"how this runner is identified on the admission record")
 	flag.DurationVar(&opts.timeout, "timeout", sandbox.DefaultTimeout, "wall clock for the run")
@@ -127,9 +131,19 @@ func run(logger *slog.Logger, opts options) (int, error) {
 		slog.String("image", manifest.Image),
 		slog.String("runtime", opts.runtime))
 
-	runner, err := admission.NewRunner(opts.runnerName,
-		sandbox.New(sandbox.WithRuntime(opts.runtime)),
-		admission.WithLimits(sandbox.Limits{Timeout: opts.timeout}))
+	runnerOptions := []admission.Option{
+		admission.WithSandbox(sandbox.New(sandbox.WithRuntime(opts.runtime))),
+		admission.WithLimits(sandbox.Limits{Timeout: opts.timeout}),
+	}
+	if opts.moduleDir != "" {
+		store, err := wasm.NewModuleStore(opts.moduleDir)
+		if err != nil {
+			return exitCouldNotRun, err
+		}
+		runnerOptions = append(runnerOptions, admission.WithModules(store))
+	}
+
+	runner, err := admission.NewRunner(opts.runnerName, runnerOptions...)
 	if err != nil {
 		return exitCouldNotRun, err
 	}

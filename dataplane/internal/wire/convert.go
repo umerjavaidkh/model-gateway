@@ -307,6 +307,8 @@ func decodeGuardrail(g *pb.GuardrailBinding) core.GuardrailBinding {
 		Component: g.GetComponent(),
 		Version:   g.GetVersion(),
 		ConfigRef: g.GetConfigRef(),
+		Execution: g.GetExecution(),
+		Module:    g.GetModule(),
 		Budget: core.GuardrailBudget{
 			Timeout:  time.Duration(g.GetTimeoutMs()) * time.Millisecond,
 			Mode:     mode,
@@ -335,6 +337,8 @@ func encodeGuardrail(g core.GuardrailBinding) *pb.GuardrailBinding {
 		Component:   g.Component,
 		Version:     g.Version,
 		ConfigRef:   g.ConfigRef,
+		Execution:   g.Execution,
+		Module:      g.Module,
 		TimeoutMs:   clampMillis(g.Budget.Timeout),
 		FailureMode: mode,
 		Blocking:    g.Budget.Blocking,

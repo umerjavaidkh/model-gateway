@@ -18,9 +18,22 @@ readonly PORT="${CROSSCHECK_PORT:-18099}"
 
 WORK="$(mktemp -d)"
 GATEWAY_PID=""
+# stop waits for a process to actually exit after asking it to.
+#
+# Without the wait, the rm below can race a process that has been signalled but
+# not yet reaped, and removing a directory holding its running executable fails
+# with a permission error. That turns a passing check into a failing one after
+# it has already printed that it passed, which is the worst way for a check to
+# be flaky.
+stop() {
+  [ -n "${1:-}" ] || return 0
+  kill "$1" 2>/dev/null || return 0
+  wait "$1" 2>/dev/null || true
+}
+
 cleanup() {
-  [ -n "$GATEWAY_PID" ] && kill "$GATEWAY_PID" 2>/dev/null || true
-  rm -rf "$WORK"
+  stop "$GATEWAY_PID"
+  rm -rf "$WORK" 2>/dev/null || echo "could not remove $WORK" >&2
 }
 trap cleanup EXIT
 
