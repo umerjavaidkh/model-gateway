@@ -17,6 +17,7 @@ dependencies = [
 [project.scripts]
 gatewayctl = "model_gateway_control.cli:main"
 gateway-admin = "model_gateway_control.admin_main:main"
+gateway-finetune = "model_gateway_control.finetune_main:main"
 gateway-accounting = "model_gateway_control.accounting_main:main"
 
 [dependency-groups]

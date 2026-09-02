@@ -30,6 +30,7 @@ from model_gateway_control.domain.signing import (
     TrustStore,
     sign,
 )
+from model_gateway_control.service.finetune import Trainers
 from model_gateway_control.wire import snapshot_pb2 as pb
 
 DEFAULT_URL = "sqlite+aiosqlite:///:memory:"
@@ -625,3 +626,127 @@ async def test_registration_still_works_with_no_signing_configured(
 
     assert response.status_code == 201
     assert response.json()["signing_key_id"] == ""
+
+
+# --- fine-tuning ------------------------------------------------------------
+
+
+class StubTrainer:
+    """A trainer the API can resolve. It is never called from these tests."""
+
+    def name(self) -> str:
+        return "llamafactory-lora"
+
+    async def submit(self, job_name: str, job_spec: object, idempotency_key: str) -> object:
+        raise NotImplementedError
+
+    async def poll(self, external_id: str) -> object:
+        raise NotImplementedError
+
+    async def cancel(self, external_id: str) -> None:
+        raise NotImplementedError
+
+
+@pytest.fixture
+async def training_client(engine: AsyncEngine) -> AsyncIterator[AsyncClient]:
+    app = create_app(
+        AdminSettings(
+            engine=engine,
+            key_pepper=PEPPER,
+            admin_token=TOKEN,
+            trainers=Trainers((StubTrainer(),)),  # type: ignore[arg-type]
+            now=lambda: NOW,
+        )
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://admin",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+    ) as client:
+        yield client
+
+
+def _job_body(**overrides: object) -> dict[str, object]:
+    body: dict[str, object] = {
+        "name": "support-triage-v3",
+        "tenant": "acme",
+        "base_model": "llama-3.3-70b",
+        "trainer": "llamafactory-lora",
+        "trainer_version": "1.0.0",
+        "dataset_uri": "s3://acme-training/triage-v3.jsonl",
+        "dataset_checksum": "sha256:" + "a" * 64,
+        "dataset_rows": 48210,
+        "dataset_schema_version": "chatml-v1",
+        "budget_ref": "acme/training-q3",
+    }
+    body.update(overrides)
+    return body
+
+
+async def test_a_submitted_job_starts_pending_and_can_be_polled(
+    training_client: AsyncClient,
+) -> None:
+    # The shape an agent drives: POST a spec, then poll until the phase
+    # settles, rather than orchestrating the steps itself.
+    created = await training_client.post("/v1/finetune/jobs", json=_job_body())
+    assert created.status_code == 201, created.text
+    assert created.json()["status"]["phase"] == "pending"
+
+    fetched = await training_client.get("/v1/finetune/jobs/acme/support-triage-v3")
+    assert fetched.status_code == 200
+    assert fetched.json()["spec"]["dataset"]["rows"] == 48210
+
+
+async def test_a_client_cannot_set_a_job_status(training_client: AsyncClient) -> None:
+    # A client that could set the phase could mark a job trained without
+    # anything having been trained.
+    response = await training_client.post(
+        "/v1/finetune/jobs",
+        json=_job_body() | {"status": {"phase": "trained"}, "phase": "trained"},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["status"]["phase"] == "pending"
+    assert response.json()["status"]["artifact_ref"] == ""
+
+
+async def test_a_job_naming_an_unconfigured_trainer_is_refused(
+    training_client: AsyncClient,
+) -> None:
+    # At submission, while someone is watching, rather than in a reconciler log
+    # nobody is reading.
+    response = await training_client.post(
+        "/v1/finetune/jobs", json=_job_body(trainer="a-trainer-nobody-configured")
+    )
+
+    assert response.status_code == 404
+    assert "no trainer named" in response.text
+
+
+async def test_a_dataset_without_a_checksum_is_refused(training_client: AsyncClient) -> None:
+    # Without one, the data behind that URI can change after the job runs.
+    response = await training_client.post(
+        "/v1/finetune/jobs", json=_job_body(dataset_checksum="latest")
+    )
+
+    assert response.status_code == 400
+    assert "checksum" in response.text
+
+
+async def test_resubmitting_the_same_job_name_is_a_conflict(
+    training_client: AsyncClient,
+) -> None:
+    assert (await training_client.post("/v1/finetune/jobs", json=_job_body())).status_code == 201
+
+    response = await training_client.post("/v1/finetune/jobs", json=_job_body())
+
+    assert response.status_code == 409
+
+
+async def test_cancelling_a_pending_job_settles_it(training_client: AsyncClient) -> None:
+    await training_client.post("/v1/finetune/jobs", json=_job_body())
+
+    cancelled = await training_client.post("/v1/finetune/jobs/acme/support-triage-v3/cancel")
+
+    assert cancelled.status_code == 200
+    assert cancelled.json()["status"]["phase"] == "cancelled"

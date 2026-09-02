@@ -50,7 +50,8 @@ controlplane/       Python. Registry, identity, policy authoring, snapshot compi
   db/                 SQLAlchemy models, Alembic migrations, the repository.
   snapshot/builder.py Domain -> the versioned artifact the data plane serves.
   wire/               Generated protobuf, shared with the data plane.
-  service/            Key lifecycle, accounting, and the component registry.
+  service/            Key lifecycle, accounting, the registry, fine-tune jobs.
+  contracts/          Contract suites for control-plane ports.
   api/                The admin API. Translation only.
   cli.py              gatewayctl.
 sidecars/pii-ner/   Python. Statistical PII detection, reached over a Unix socket.
@@ -178,4 +179,6 @@ decided and why.
 | M10b — Sandboxed contract-test runner and the sidecar protocol | **done** |
 | M10c — WASM in-process components | **done** |
 | M10d — Signed manifests | **done** |
-| M11+ — Fine-tuning: TrainerPort, EvalPort, job reconciler | next |
+| M11a — Fine-tuning: TrainerPort, FineTuneJob reconciler | **done** |
+| M11b — Eval gate: EvalPort, scorecards, promotion | next |
+| M11c — Weighted rollout: shadow, canary, multi-LoRA routing | |

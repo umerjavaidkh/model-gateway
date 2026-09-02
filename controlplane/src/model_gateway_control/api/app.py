@@ -32,6 +32,8 @@ from model_gateway_control.domain.component import (
     Manifest,
     Port,
 )
+from model_gateway_control.domain.finetune import DatasetRef, FineTuneJob
+from model_gateway_control.domain.finetune import Spec as FineTuneSpec
 from model_gateway_control.domain.identity import RateLimit
 from model_gateway_control.domain.signing import Signature, TrustStore
 from model_gateway_control.errors import (
@@ -41,6 +43,7 @@ from model_gateway_control.errors import (
     InvalidRequestError,
     NotFoundError,
 )
+from model_gateway_control.service.finetune import FineTuneService, Trainers
 from model_gateway_control.service.keys import KeyService
 from model_gateway_control.service.registry import RegistryService
 from model_gateway_control.snapshot import build_snapshot
@@ -73,6 +76,12 @@ class AdminSettings:
     #: configuration rather than the database, because a trust root the
     #: database can change is not one.
     trust: TrustStore = field(default_factory=TrustStore)
+    #: Trainer backends this control plane can submit fine-tune jobs to. Empty
+    #: means jobs can still be submitted and will sit in PENDING, which is the
+    #: honest behaviour for a deployment that has not configured one — but the
+    #: API refuses a job naming a trainer it does not have, so the mistake
+    #: surfaces at submission rather than in a reconciler log.
+    trainers: Trainers = field(default_factory=Trainers)
     now: Callable[[], datetime] | None = None
 
 
@@ -339,6 +348,34 @@ def create_app(settings: AdminSettings) -> FastAPI:
         await session.commit()
         return _json_response(status.HTTP_201_CREATED, _component_json(component))
 
+    # --- fine-tuning ------------------------------------------------------
+    #
+    # Declarative, because an agent drives it: a client POSTs a spec and polls
+    # until the phase settles, rather than orchestrating submit, poll and
+    # commit and trying to recover when step three fails.
+
+    @app.post("/v1/finetune/jobs", status_code=status.HTTP_201_CREATED, dependencies=[Authorized])
+    async def submit_finetune_job(body: SubmitFineTuneJobRequest, session: Session) -> Response:
+        job = await FineTuneService(session, settings.trainers).submit(body.to_job())
+        await session.commit()
+        return _json_response(status.HTTP_201_CREATED, _job_json(job))
+
+    @app.get("/v1/finetune/jobs", dependencies=[Authorized])
+    async def list_finetune_jobs(session: Session, tenant: str | None = None) -> Response:
+        jobs = await FineTuneService(session, settings.trainers).list(tenant)
+        return _json_response(status.HTTP_200_OK, {"jobs": [_job_json(j) for j in jobs]})
+
+    @app.get("/v1/finetune/jobs/{tenant}/{name}", dependencies=[Authorized])
+    async def get_finetune_job(tenant: str, name: str, session: Session) -> Response:
+        job = await FineTuneService(session, settings.trainers).get(tenant, name)
+        return _json_response(status.HTTP_200_OK, _job_json(job))
+
+    @app.post("/v1/finetune/jobs/{tenant}/{name}/cancel", dependencies=[Authorized])
+    async def cancel_finetune_job(tenant: str, name: str, session: Session) -> Response:
+        job = await FineTuneService(session, settings.trainers).cancel(tenant, name)
+        await session.commit()
+        return _json_response(status.HTTP_200_OK, _job_json(job))
+
     @app.get("/v1/components", dependencies=[Authorized])
     async def list_components(session: Session, port: Port | None = None) -> Response:
         components = await RegistryService(session).list(port)
@@ -425,6 +462,81 @@ def create_app(settings: AdminSettings) -> FastAPI:
         )
 
     return app
+
+
+class SubmitFineTuneJobRequest(BaseModel):
+    """A fine-tune job as an operator or an agent submits it.
+
+    Spec only. The status is the reconciler's, and a client that could set it
+    could mark a job trained without anything having been trained.
+    """
+
+    name: str = Field(min_length=3, max_length=64)
+    tenant: str = Field(min_length=1, max_length=64)
+    base_model: str = Field(min_length=1, max_length=128)
+    trainer: str = Field(min_length=1, max_length=64)
+    trainer_version: str = Field(min_length=1, max_length=64)
+    dataset_uri: str = Field(min_length=1, max_length=1024)
+    dataset_checksum: str = Field(min_length=1, max_length=128)
+    dataset_rows: int = Field(gt=0)
+    dataset_schema_version: str = Field(min_length=1, max_length=64)
+    hyperparameters: dict[str, str] = Field(default_factory=dict)
+    budget_ref: str = ""
+    eval_suite: str = ""
+
+    def to_job(self) -> FineTuneJob:
+        return FineTuneJob(
+            name=self.name,
+            # Generated here, never accepted from the caller: two jobs sharing
+            # a key would get the same run back from an idempotent trainer, and
+            # the second would silently adopt the first's training.
+            idempotency_key=FineTuneJob.new_key(),
+            spec=FineTuneSpec(
+                tenant=self.tenant,
+                base_model=self.base_model,
+                trainer=self.trainer,
+                trainer_version=self.trainer_version,
+                dataset=DatasetRef(
+                    uri=self.dataset_uri,
+                    checksum=self.dataset_checksum,
+                    rows=self.dataset_rows,
+                    schema_version=self.dataset_schema_version,
+                ),
+                hyperparameters=self.hyperparameters,
+                budget_ref=self.budget_ref,
+                eval_suite=self.eval_suite,
+            ),
+        )
+
+
+def _job_json(job: FineTuneJob) -> dict[str, Any]:
+    """A job as spec and status, the shape it was submitted in."""
+    return {
+        "name": job.name,
+        "spec": {
+            "tenant": job.spec.tenant,
+            "base_model": job.spec.base_model,
+            "trainer": job.spec.trainer,
+            "trainer_version": job.spec.trainer_version,
+            "dataset": {
+                "uri": job.spec.dataset.uri,
+                "checksum": job.spec.dataset.checksum,
+                "rows": job.spec.dataset.rows,
+                "schema_version": job.spec.dataset.schema_version,
+            },
+            "hyperparameters": job.spec.hyperparameters,
+            "budget_ref": job.spec.budget_ref,
+            "eval_suite": job.spec.eval_suite,
+        },
+        "status": {
+            "phase": str(job.status.phase),
+            "external_id": job.status.external_id,
+            "artifact_ref": job.status.artifact_ref,
+            "reason": job.status.reason,
+            "cost_micro_usd": job.status.cost_micro_usd,
+            "attempts": job.status.attempts,
+        },
+    }
 
 
 def _component_json(component: Component) -> dict[str, Any]:
