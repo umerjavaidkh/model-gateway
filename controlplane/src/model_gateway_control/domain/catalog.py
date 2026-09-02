@@ -112,6 +112,10 @@ class Deployment:
     # Share of traffic, 0-100. Zero means registered but not serving — where a
     # fine-tuned adapter sits while it takes shadow traffic.
     weight: int = 0
+    # Share of the base model's traffic mirrored here, 0-100. A separate
+    # dimension from weight: an adapter in shadow serves nobody while seeing
+    # real requests, and the response is discarded.
+    shadow_percent: int = 0
     cost: Cost = field(default_factory=Cost)
     capabilities: tuple[Capability, ...] = ()
 

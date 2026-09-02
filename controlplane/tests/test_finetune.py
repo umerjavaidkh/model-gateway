@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import pytest_asyncio
@@ -39,6 +40,7 @@ from model_gateway_control.service.finetune import (
     Reconciler,
     Trainers,
 )
+from model_gateway_control.service.rollout import Policy as RolloutPolicy
 from model_gateway_control.service.trainer import Run, RunState, TrainerPort
 
 DEFAULT_URL = "sqlite+aiosqlite:///:memory:"
@@ -870,3 +872,163 @@ async def test_a_rollout_survives_the_round_trip(
     assert stored.status.rollout_weight == 1
     assert stored.status.rollout_step == 1
     assert stored.spec.canary_steps == (1, 5, 25, 100)
+
+
+# --- automatic promotion ----------------------------------------------------
+
+
+async def usage_for(
+    sessions: async_sessionmaker[AsyncSession], deployment: str, *, n: int, errors: int
+) -> None:
+    async with sessions() as session:
+        for i in range(n):
+            session.add(
+                models.UsageRecord(
+                    request_id=f"{deployment}-{i}",
+                    tenant_id="acme",
+                    key_id="key-1",
+                    # After the step began, which is what the judgement
+                    # window starts from.
+                    occurred_at=datetime.now(UTC) + timedelta(seconds=1),
+                    deployment=deployment,
+                    outcome="upstream_error" if i < errors else "",
+                )
+            )
+        await session.commit()
+
+
+async def rolled_out(
+    sessions: async_sessionmaker[AsyncSession],
+    trainers: Trainers,
+    evaluators: Evaluators,
+    trainer: FakeTrainer,
+) -> None:
+    """A job that has cleared its gate and had a rollout started."""
+    reconciler = await train_to_evaluating(
+        sessions, trainers, evaluators, trainer, gated_spec(min_score=8_700)
+    )
+    await reconciler.reconcile_once()
+    async with sessions() as session:
+        await FineTuneService(session, trainers, evaluators).start_rollout(
+            "acme", "support-triage-v3"
+        )
+        await session.commit()
+
+
+async def test_a_healthy_canary_is_advanced_automatically(
+    sessions: async_sessionmaker[AsyncSession],
+    trainer: FakeTrainer,
+    trainers: Trainers,
+    evaluators: Evaluators,
+) -> None:
+    await rolled_out(sessions, trainers, evaluators, trainer)
+    await usage_for(sessions, "acme-support-triage-v3", n=100, errors=1)
+    await usage_for(sessions, "llama-3.3-70b", n=1000, errors=10)
+
+    reconciler = Reconciler(
+        sessions, trainers, evaluators, health=RolloutPolicy(dwell=timedelta(0))
+    )
+    [outcome] = await reconciler.advance_rollouts()
+
+    assert outcome.job.status.rollout_weight == 1
+
+
+async def test_a_failing_canary_is_taken_out_automatically(
+    sessions: async_sessionmaker[AsyncSession],
+    trainer: FakeTrainer,
+    trainers: Trainers,
+    evaluators: Evaluators,
+) -> None:
+    # The failure this exists to catch: an adapter that passed its eval suite
+    # and then falls over on real traffic.
+    await rolled_out(sessions, trainers, evaluators, trainer)
+    await usage_for(sessions, "acme-support-triage-v3", n=100, errors=50)
+    await usage_for(sessions, "llama-3.3-70b", n=1000, errors=10)
+
+    reconciler = Reconciler(
+        sessions, trainers, evaluators, health=RolloutPolicy(dwell=timedelta(0))
+    )
+    [outcome] = await reconciler.advance_rollouts()
+
+    assert outcome.job.status.rollout_weight == 0
+    assert "over the" in outcome.job.status.reason
+
+
+async def test_a_canary_with_no_evidence_is_left_alone(
+    sessions: async_sessionmaker[AsyncSession],
+    trainer: FakeTrainer,
+    trainers: Trainers,
+    evaluators: Evaluators,
+) -> None:
+    # Waiting, not advancing. Promoting on three requests would make the
+    # automation worse than the manual walk it replaces.
+    await rolled_out(sessions, trainers, evaluators, trainer)
+    await usage_for(sessions, "acme-support-triage-v3", n=3, errors=0)
+
+    reconciler = Reconciler(
+        sessions, trainers, evaluators, health=RolloutPolicy(dwell=timedelta(0))
+    )
+
+    assert await reconciler.advance_rollouts() == []
+
+    async with sessions() as session:
+        stored = await FineTuneService(session, trainers, evaluators).get(
+            "acme", "support-triage-v3"
+        )
+    assert stored.status.rollout_weight == 0
+    assert stored.rolling_out
+
+
+async def test_automatic_advancement_is_off_unless_a_policy_is_given(
+    sessions: async_sessionmaker[AsyncSession],
+    trainer: FakeTrainer,
+    trainers: Trainers,
+    evaluators: Evaluators,
+) -> None:
+    # A deployment that wants an operator to walk every step gets exactly that,
+    # rather than an automation it has to remember to turn off.
+    await rolled_out(sessions, trainers, evaluators, trainer)
+    await usage_for(sessions, "acme-support-triage-v3", n=100, errors=0)
+    await usage_for(sessions, "llama-3.3-70b", n=1000, errors=0)
+
+    assert await Reconciler(sessions, trainers, evaluators).advance_rollouts() == []
+
+
+async def test_a_completed_rollout_is_not_advanced_again(
+    sessions: async_sessionmaker[AsyncSession],
+    trainer: FakeTrainer,
+    trainers: Trainers,
+    evaluators: Evaluators,
+) -> None:
+    await rolled_out(sessions, trainers, evaluators, trainer)
+    async with sessions() as session:
+        service = FineTuneService(session, trainers, evaluators)
+        for _ in range(4):
+            await service.advance_rollout("acme", "support-triage-v3")
+        await session.commit()
+
+    await usage_for(sessions, "acme-support-triage-v3", n=100, errors=0)
+    reconciler = Reconciler(
+        sessions, trainers, evaluators, health=RolloutPolicy(dwell=timedelta(0))
+    )
+
+    assert await reconciler.advance_rollouts() == []
+
+
+async def test_an_adapter_shadows_only_while_it_serves_nobody(
+    sessions: async_sessionmaker[AsyncSession],
+    trainer: FakeTrainer,
+    trainers: Trainers,
+    evaluators: Evaluators,
+) -> None:
+    # Once real traffic reaches it there is nothing left for a mirror to say:
+    # the adapter is being measured on requests it actually answered.
+    await rolled_out(sessions, trainers, evaluators, trainer)
+
+    async with sessions() as session:
+        service = FineTuneService(session, trainers, evaluators)
+        at_zero = await service.get("acme", "support-triage-v3")
+        assert at_zero.shadowing > 0
+
+        serving = await service.advance_rollout("acme", "support-triage-v3")
+        assert serving.shadowing == 0

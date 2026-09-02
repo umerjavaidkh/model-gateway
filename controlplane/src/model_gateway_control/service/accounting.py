@@ -89,6 +89,8 @@ class Accountant:
             "cost_micro_usd": event.cost_micro_usd,
             "price_micro_usd": event.price_micro_usd,
             "outcome": event.outcome,
+            "deployment": event.deployment,
+            "shadow": event.shadow,
         }
 
         statement = (

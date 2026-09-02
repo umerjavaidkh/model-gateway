@@ -129,7 +129,10 @@ type GlobalLayer struct {
 	version LayerVersion
 	builtAt time.Time
 
-	deployments     map[DeploymentID]Deployment
+	deployments map[DeploymentID]Deployment
+	// shadows indexes mirroring adapters by the base model they shadow, so the
+	// request path does not scan the catalog per request.
+	shadows         map[string][]Deployment
 	byRoute         map[RoutingKey][]Deployment
 	aliases         map[string]ModelAlias
 	tenantByPrefix  map[KeyPrefix]TenantID
@@ -153,6 +156,7 @@ func NewGlobalLayer(spec GlobalSpec) (*GlobalLayer, error) {
 		builtAt:         spec.BuiltAt,
 		deployments:     make(map[DeploymentID]Deployment, len(spec.Deployments)),
 		byRoute:         make(map[RoutingKey][]Deployment),
+		shadows:         make(map[string][]Deployment),
 		aliases:         make(map[string]ModelAlias, len(spec.Aliases)),
 		tenantByPrefix:  maps.Clone(spec.TenantPrefixes),
 		plugins:         make(map[PortName]PluginBinding, len(spec.DefaultPlugins)),
@@ -180,8 +184,22 @@ func NewGlobalLayer(spec GlobalSpec) (*GlobalLayer, error) {
 		if d.Weight > 100 {
 			return nil, Newf(CodeInvalidRequest, "deployment %q weight %d exceeds 100", d.ID, d.Weight)
 		}
+		if d.ShadowPercent > 100 {
+			return nil, Newf(CodeInvalidRequest,
+				"deployment %q shadows %d%% of traffic, which is more than there is",
+				d.ID, d.ShadowPercent)
+		}
+		if d.ShadowPercent > 0 && !d.Key.IsAdapter() {
+			// It would mirror a request to the very deployment that served it,
+			// doubling the bill to compare something with itself.
+			return nil, Newf(CodeInvalidRequest,
+				"deployment %q is not an adapter and cannot shadow", d.ID)
+		}
 		g.deployments[d.ID] = d
 		g.byRoute[d.Key] = append(g.byRoute[d.Key], d)
+		if d.Shadowing() {
+			g.shadows[d.Key.BaseModel] = append(g.shadows[d.Key.BaseModel], d)
+		}
 	}
 
 	for _, a := range spec.Aliases {
@@ -489,6 +507,19 @@ func (s *Snapshot) ResolveAlias(tenant TenantID, name string) []RoutingKey {
 // write to it; the router builds its own ordered candidate list.
 func (s *Snapshot) Deployments(key RoutingKey) []Deployment {
 	return s.global.byRoute[key]
+}
+
+// Shadows returns the adapter deployments that mirror a base model's traffic.
+//
+// Looked up by base model rather than by routing key, because that is the
+// relationship: the adapters trained from a model shadow the traffic that
+// model serves. They are invisible to Select — weight zero — which is the
+// point: a shadow serves nobody.
+//
+// The returned slice aliases snapshot memory; callers may read it and must not
+// write to it.
+func (s *Snapshot) Shadows(baseModel string) []Deployment {
+	return s.global.shadows[baseModel]
 }
 
 // Deployment looks up a single deployment by id.

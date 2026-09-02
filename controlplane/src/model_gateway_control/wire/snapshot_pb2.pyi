@@ -96,7 +96,7 @@ class Cost(_message.Message):
     def __init__(self, input_per_1k_micro_usd: _Optional[int] = ..., output_per_1k_micro_usd: _Optional[int] = ..., cached_input_per_1k_micro_usd: _Optional[int] = ..., cache_write_per_1k_micro_usd: _Optional[int] = ...) -> None: ...
 
 class Deployment(_message.Message):
-    __slots__ = ("id", "key", "provider", "endpoint", "region", "trust_tier", "credential_ref", "weight", "cost", "capabilities")
+    __slots__ = ("id", "key", "provider", "endpoint", "region", "trust_tier", "credential_ref", "weight", "shadow_percent", "cost", "capabilities")
     ID_FIELD_NUMBER: _ClassVar[int]
     KEY_FIELD_NUMBER: _ClassVar[int]
     PROVIDER_FIELD_NUMBER: _ClassVar[int]
@@ -105,6 +105,7 @@ class Deployment(_message.Message):
     TRUST_TIER_FIELD_NUMBER: _ClassVar[int]
     CREDENTIAL_REF_FIELD_NUMBER: _ClassVar[int]
     WEIGHT_FIELD_NUMBER: _ClassVar[int]
+    SHADOW_PERCENT_FIELD_NUMBER: _ClassVar[int]
     COST_FIELD_NUMBER: _ClassVar[int]
     CAPABILITIES_FIELD_NUMBER: _ClassVar[int]
     id: str
@@ -115,9 +116,10 @@ class Deployment(_message.Message):
     trust_tier: TrustTier
     credential_ref: str
     weight: int
+    shadow_percent: int
     cost: Cost
     capabilities: _containers.RepeatedScalarFieldContainer[str]
-    def __init__(self, id: _Optional[str] = ..., key: _Optional[_Union[RoutingKey, _Mapping]] = ..., provider: _Optional[str] = ..., endpoint: _Optional[str] = ..., region: _Optional[str] = ..., trust_tier: _Optional[_Union[TrustTier, str]] = ..., credential_ref: _Optional[str] = ..., weight: _Optional[int] = ..., cost: _Optional[_Union[Cost, _Mapping]] = ..., capabilities: _Optional[_Iterable[str]] = ...) -> None: ...
+    def __init__(self, id: _Optional[str] = ..., key: _Optional[_Union[RoutingKey, _Mapping]] = ..., provider: _Optional[str] = ..., endpoint: _Optional[str] = ..., region: _Optional[str] = ..., trust_tier: _Optional[_Union[TrustTier, str]] = ..., credential_ref: _Optional[str] = ..., weight: _Optional[int] = ..., shadow_percent: _Optional[int] = ..., cost: _Optional[_Union[Cost, _Mapping]] = ..., capabilities: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class ModelAlias(_message.Message):
     __slots__ = ("name", "targets")

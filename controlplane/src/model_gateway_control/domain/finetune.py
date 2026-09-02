@@ -35,6 +35,11 @@ from model_gateway_control.errors import ConflictError, InvalidRequestError
 #: than a requirement — a tenant with little traffic learns nothing from 1%.
 DEFAULT_CANARY_STEPS = (1, 5, 25, 100)
 
+#: How much of the base model's traffic is mirrored to an adapter at weight
+#: zero. Ten percent is enough to see an adapter that falls over and cheap
+#: enough that nobody turns it off.
+DEFAULT_SHADOW_PERCENT = 10
+
 _NAME = re.compile(r"^[a-z0-9][a-z0-9-]{2,63}$")
 _CHECKSUM = re.compile(r"^sha256:[0-9a-f]{64}$")
 
@@ -143,6 +148,11 @@ class Spec:
     #: enters the routing table at zero and climbs, rather than being switched
     #: on. Rollback is free: it is snapshot version N-1.
     canary_steps: tuple[int, ...] = DEFAULT_CANARY_STEPS
+    #: Share of the base model's traffic mirrored to the adapter while it is at
+    #: zero weight. Mirroring doubles inference spend for whatever fraction it
+    #: covers, so this is a sample rather than everything — a shadow that costs
+    #: as much as production is one an operator turns off.
+    shadow_percent: int = DEFAULT_SHADOW_PERCENT
 
     def __post_init__(self) -> None:
         if not self.tenant:
@@ -151,6 +161,8 @@ class Spec:
             raise InvalidRequestError("a fine-tune job needs a base model")
         if not self.trainer:
             raise InvalidRequestError("a fine-tune job needs a trainer component")
+        if not 0 <= self.shadow_percent <= 100:
+            raise InvalidRequestError(f"shadow percent {self.shadow_percent} is not a percentage")
         if self.canary_steps:
             if list(self.canary_steps) != sorted(self.canary_steps):
                 raise InvalidRequestError(
@@ -327,6 +339,18 @@ class FineTuneJob:
     # decision rather than a timer's: without a health signal to advance on,
     # a rollout that promoted itself would promote a bad adapter just as
     # reliably as a good one.
+
+    @property
+    def shadowing(self) -> int:
+        """How much traffic is mirrored to this adapter right now.
+
+        Only while it is at zero weight. Once it serves real traffic there is
+        nothing left for a mirror to tell anyone: the adapter is being measured
+        on requests it actually answered.
+        """
+        if not self.rolling_out or self.status.rollout_weight > 0:
+            return 0
+        return self.spec.shadow_percent
 
     @property
     def rolling_out(self) -> bool:

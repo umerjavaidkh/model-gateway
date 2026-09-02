@@ -142,6 +142,9 @@ class Repository:
                     id=f"{host.id}+{row.tenant_id}-{row.name}",
                     key=RoutingKey(base_model=row.base_model, adapter_id=row.name),
                     weight=row.rollout_weight,
+                    # Mirrored only while it serves nobody. Once real traffic
+                    # reaches it there is nothing left for a shadow to say.
+                    shadow_percent=row.shadow_percent if row.rollout_weight == 0 else 0,
                 )
             )
         return tuple(adapters)

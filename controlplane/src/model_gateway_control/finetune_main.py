@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from model_gateway_control.db.session import create_engine, session_factory
 from model_gateway_control.errors import InvalidRequestError
 from model_gateway_control.service.finetune import Evaluators, Reconciler, Trainers
+from model_gateway_control.service.rollout import Policy as RolloutPolicy
 
 logger = logging.getLogger("finetune")
 
@@ -38,19 +39,31 @@ async def run(
     sessions: async_sessionmaker[AsyncSession],
     trainers: Trainers,
     evaluators: Evaluators | None = None,
+    health: RolloutPolicy | None = None,
     interval: float = DEFAULT_INTERVAL_SECONDS,
     *,
     stop: asyncio.Event | None = None,
 ) -> None:
     """Reconcile until stopped."""
     stop = stop or asyncio.Event()
-    reconciler = Reconciler(sessions, trainers, evaluators or Evaluators())
+    reconciler = Reconciler(sessions, trainers, evaluators or Evaluators(), health=health)
 
     while not stop.is_set():
         try:
             for outcome in await reconciler.reconcile_once():
                 if outcome.advanced:
                     logger.info("job %s is now %s", outcome.job.ref, outcome.job.status.phase)
+            # A separate pass, because it answers a different question about a
+            # different set of jobs: the first moves jobs towards an artifact,
+            # this moves artifacts into production. Folding them together would
+            # mean a training backlog delayed a rollout decision, and a stuck
+            # rollout looked like a training problem.
+            for outcome in await reconciler.advance_rollouts():
+                logger.info(
+                    "rollout for %s is at %d%%",
+                    outcome.job.ref,
+                    outcome.job.status.rollout_weight,
+                )
         except Exception:
             # A pass that fails must not end the loop. Individual jobs already
             # survive a failing trainer; this catches the rest — a database
@@ -74,6 +87,16 @@ def main() -> int:
 
     interval = float(os.environ.get("GATEWAY_FINETUNE_INTERVAL", DEFAULT_INTERVAL_SECONDS))
 
+    # Off unless asked for. A deployment that wants an operator to walk every
+    # canary step gets exactly that, rather than an automation it has to
+    # remember to turn off — and automatic promotion rests on an operational
+    # signal, not a quality one, which a deployment may reasonably not want to
+    # promote on. See service/rollout.py.
+    health: RolloutPolicy | None = None
+    if os.environ.get("GATEWAY_ROLLOUT_AUTOMATIC") == "true":
+        health = RolloutPolicy()
+        logger.info("canary steps will advance automatically on observed error rates")
+
     # No adapters are registered here. A deployment builds this process with
     # the ones it actually has; shipping one for a backend nobody can reach
     # from this repository would be code nothing has ever run, and the contract
@@ -91,7 +114,7 @@ def main() -> int:
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, stop.set)
         try:
-            await run(sessions, trainers, evaluators, interval, stop=stop)
+            await run(sessions, trainers, evaluators, health, interval, stop=stop)
         finally:
             await engine.dispose()
 

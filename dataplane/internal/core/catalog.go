@@ -121,6 +121,15 @@ type Deployment struct {
 	// while it takes shadow traffic, before the canary steps begin.
 	Weight uint32
 
+	// ShadowPercent is the share of the base model's traffic mirrored here,
+	// 0-100. A separate dimension from Weight: an adapter in shadow serves
+	// nobody while seeing real requests, and its response is discarded.
+	//
+	// Sampled rather than all-or-nothing because mirroring doubles inference
+	// spend for whatever fraction it covers, and a shadow that costs as much
+	// as production is one an operator turns off.
+	ShadowPercent uint32
+
 	Cost         Cost
 	Capabilities []Capability
 }
@@ -137,6 +146,14 @@ func (d *Deployment) Supports(required ...Capability) bool {
 
 // Serving reports whether the deployment may take live traffic.
 func (d *Deployment) Serving() bool { return d.Weight > 0 }
+
+// Shadowing reports whether this deployment should receive mirrored traffic.
+//
+// An adapter only: shadowing a base model would mirror a request to the very
+// deployment that served it.
+func (d *Deployment) Shadowing() bool {
+	return d.ShadowPercent > 0 && d.Key.IsAdapter()
+}
 
 // ModelAlias decouples client code from concrete model IDs: callers ask for
 // "fast" or "reasoning" and the snapshot decides what that means today.

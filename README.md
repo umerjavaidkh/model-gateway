@@ -34,6 +34,7 @@ dataplane/          Go. The request path: auth -> admit -> route -> adapt.
   internal/tracing/   OpenTelemetry setup. Adopted, not wrapped.
   internal/limits/    Rate limiting: a local lease in front of a shared window.
   internal/router/    Selection and execution: candidates, breakers, failover.
+  internal/shadow/    Mirrors served requests to adapters nobody is routed to yet.
   internal/guardrails/ Inspections, run under the budget each was admitted with.
   internal/policy/    The compiled decision table. Evaluated, never parsed.
   internal/pii/       Detection, transformation, and restoration across chunks.
@@ -182,4 +183,4 @@ decided and why.
 | M11a — Fine-tuning: TrainerPort, FineTuneJob reconciler | **done** |
 | M11b — Eval gate: EvalPort, scorecards, promotion gate | **done** |
 | M11c — Weighted rollout: canary steps, multi-LoRA routing | **done** |
-| M11d — Shadow traffic: mirrored scoring, automatic promotion | next |
+| M11d — Shadow traffic: mirrored scoring, automatic promotion | **done** |
