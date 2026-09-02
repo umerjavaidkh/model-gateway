@@ -31,6 +31,10 @@ from uuid import uuid4
 from model_gateway_control.domain.scorecard import Decision, PromotionGate, Scorecard
 from model_gateway_control.errors import ConflictError, InvalidRequestError
 
+#: The rollout the plan describes: 1%, then 5, 25 and 100. A default rather
+#: than a requirement — a tenant with little traffic learns nothing from 1%.
+DEFAULT_CANARY_STEPS = (1, 5, 25, 100)
+
 _NAME = re.compile(r"^[a-z0-9][a-z0-9-]{2,63}$")
 _CHECKSUM = re.compile(r"^sha256:[0-9a-f]{64}$")
 
@@ -134,6 +138,11 @@ class Spec:
     #: faces is fixed when it is submitted: lowering the gate afterwards cannot
     #: retroactively promote something that already failed it.
     promotion_gate: PromotionGate = field(default_factory=PromotionGate)
+    #: Traffic shares to walk through, as percentages. A fine-tuned model's
+    #: regression is silent — no errors, just worse output — so the adapter
+    #: enters the routing table at zero and climbs, rather than being switched
+    #: on. Rollback is free: it is snapshot version N-1.
+    canary_steps: tuple[int, ...] = DEFAULT_CANARY_STEPS
 
     def __post_init__(self) -> None:
         if not self.tenant:
@@ -142,6 +151,16 @@ class Spec:
             raise InvalidRequestError("a fine-tune job needs a base model")
         if not self.trainer:
             raise InvalidRequestError("a fine-tune job needs a trainer component")
+        if self.canary_steps:
+            if list(self.canary_steps) != sorted(self.canary_steps):
+                raise InvalidRequestError(
+                    f"canary steps {self.canary_steps} must ascend; a rollout that goes "
+                    "backwards is a rollback, and a rollback is a snapshot away"
+                )
+            if not all(0 < step <= 100 for step in self.canary_steps):
+                raise InvalidRequestError(
+                    f"canary steps {self.canary_steps} must each be a percentage above zero"
+                )
         if not self.trainer_version:
             # Pinned for the same reason a component image is: an unpinned
             # trainer turns a reproducible job into one nobody can repeat.
@@ -164,6 +183,13 @@ class Status:
     #: What it measured about the base model, when the gate needed something to
     #: compare against.
     baseline: Scorecard | None = None
+    #: The share of traffic the adapter is currently taking, as a percentage.
+    #: Zero means it is in the routing table and not serving, which is where a
+    #: rollout starts and where an abort returns it.
+    rollout_weight: int = 0
+    #: How far through the canary steps it has walked. -1 means no rollout has
+    #: been started, which is distinct from step 0 at weight 0.
+    rollout_step: int = -1
     #: What the run cost, in integer micro-USD. Money is never a float.
     cost_micro_usd: int = 0
     #: How many times the reconciler has acted on this job. An operator asking
@@ -175,6 +201,8 @@ class Status:
     def __post_init__(self) -> None:
         if self.cost_micro_usd < 0:
             raise InvalidRequestError("a job cannot have cost a negative amount")
+        if not 0 <= self.rollout_weight <= 100:
+            raise InvalidRequestError(f"rollout weight {self.rollout_weight} is not a percentage")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -289,6 +317,70 @@ class FineTuneJob:
             cost_micro_usd=(
                 self.status.cost_micro_usd if cost_micro_usd is None else cost_micro_usd
             ),
+        )
+
+    # --- rollout ----------------------------------------------------------
+    #
+    # Weighted, not a flip. A fine-tuned model's regression is silent, so the
+    # adapter enters the routing table at zero, climbs through the steps, and
+    # can be returned to zero at any point. Each of these is an operator's
+    # decision rather than a timer's: without a health signal to advance on,
+    # a rollout that promoted itself would promote a bad adapter just as
+    # reliably as a good one.
+
+    @property
+    def rolling_out(self) -> bool:
+        """Whether a rollout has been started for this artifact."""
+        return self.status.rollout_step >= 0
+
+    @property
+    def adapter_id(self) -> str:
+        """How the routing key names this adapter.
+
+        The job name, which is already unique within a tenant. The routing key
+        is (base model, adapter), so one base deployment serves every adapter
+        trained from it — which is the whole economics of multi-LoRA.
+        """
+        return self.name
+
+    def start_rollout(self) -> FineTuneJob:
+        """Put the adapter in the routing table at weight zero."""
+        if self.status.phase is not Phase.READY:
+            raise ConflictError(
+                f"job {self.ref} is {self.status.phase}; only an artifact that cleared "
+                "its gate can enter the routing table"
+            )
+        if self.rolling_out:
+            raise ConflictError(f"job {self.ref} is already rolling out")
+        return replace(self, status=replace(self.status, rollout_step=0, rollout_weight=0))
+
+    def advance_rollout(self) -> FineTuneJob:
+        """Take the next canary step."""
+        if not self.rolling_out:
+            raise ConflictError(f"job {self.ref} has no rollout to advance")
+
+        steps = self.spec.canary_steps
+        nxt = self.status.rollout_step
+        if nxt >= len(steps):
+            raise ConflictError(
+                f"job {self.ref} is at {self.status.rollout_weight}% and has no further steps"
+            )
+        return replace(
+            self, status=replace(self.status, rollout_step=nxt + 1, rollout_weight=steps[nxt])
+        )
+
+    def abort_rollout(self, reason: str = "aborted by an operator") -> FineTuneJob:
+        """Return the adapter to zero traffic.
+
+        It stays in the routing table rather than being removed. Removing it
+        would mean the next rollout starts from nothing, losing the record that
+        this one happened — and an aborted rollout is exactly the thing someone
+        will want to find later.
+        """
+        if not self.rolling_out:
+            raise ConflictError(f"job {self.ref} has no rollout to abort")
+        return replace(
+            self, status=replace(self.status, rollout_weight=0, rollout_step=0, reason=reason)
         )
 
     def cancelled(self, reason: str = "cancelled by an operator") -> FineTuneJob:

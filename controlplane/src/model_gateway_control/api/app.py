@@ -32,7 +32,11 @@ from model_gateway_control.domain.component import (
     Manifest,
     Port,
 )
-from model_gateway_control.domain.finetune import DatasetRef, FineTuneJob
+from model_gateway_control.domain.finetune import (
+    DEFAULT_CANARY_STEPS,
+    DatasetRef,
+    FineTuneJob,
+)
 from model_gateway_control.domain.finetune import Spec as FineTuneSpec
 from model_gateway_control.domain.identity import RateLimit
 from model_gateway_control.domain.scorecard import BASIS_POINTS, PromotionGate, Scorecard
@@ -379,6 +383,32 @@ def create_app(settings: AdminSettings) -> FastAPI:
         )
         return _json_response(status.HTTP_200_OK, _job_json(job))
 
+    # Rollout steps are operator decisions rather than a timer's. Without a
+    # health signal to advance on, a rollout that promoted itself would promote
+    # a bad adapter just as reliably as a good one — and a fine-tuned
+    # regression is silent, so nothing would notice.
+
+    @app.post("/v1/finetune/jobs/{tenant}/{name}/rollout", dependencies=[Authorized])
+    async def start_rollout(tenant: str, name: str, session: Session) -> Response:
+        service = FineTuneService(session, settings.trainers, settings.evaluators)
+        job = await service.start_rollout(tenant, name)
+        await session.commit()
+        return _json_response(status.HTTP_200_OK, _job_json(job))
+
+    @app.post("/v1/finetune/jobs/{tenant}/{name}/rollout/advance", dependencies=[Authorized])
+    async def advance_rollout(tenant: str, name: str, session: Session) -> Response:
+        service = FineTuneService(session, settings.trainers, settings.evaluators)
+        job = await service.advance_rollout(tenant, name)
+        await session.commit()
+        return _json_response(status.HTTP_200_OK, _job_json(job))
+
+    @app.post("/v1/finetune/jobs/{tenant}/{name}/rollout/abort", dependencies=[Authorized])
+    async def abort_rollout(tenant: str, name: str, session: Session) -> Response:
+        service = FineTuneService(session, settings.trainers, settings.evaluators)
+        job = await service.abort_rollout(tenant, name)
+        await session.commit()
+        return _json_response(status.HTTP_200_OK, _job_json(job))
+
     @app.post("/v1/finetune/jobs/{tenant}/{name}/cancel", dependencies=[Authorized])
     async def cancel_finetune_job(tenant: str, name: str, session: Session) -> Response:
         job = await FineTuneService(session, settings.trainers, settings.evaluators).cancel(
@@ -499,6 +529,9 @@ class SubmitFineTuneJobRequest(BaseModel):
     #: decided by the last bits of a float.
     min_score: int = Field(default=0, ge=0, le=BASIS_POINTS)
     must_not_regress: list[str] = Field(default_factory=list)
+    #: Traffic shares to walk through once the gate is cleared. A fine-tuned
+    #: regression is silent, so the adapter climbs rather than being switched on.
+    canary_steps: list[int] = Field(default_factory=lambda: list(DEFAULT_CANARY_STEPS))
 
     def to_job(self) -> FineTuneJob:
         return FineTuneJob(
@@ -521,6 +554,7 @@ class SubmitFineTuneJobRequest(BaseModel):
                 hyperparameters=self.hyperparameters,
                 budget_ref=self.budget_ref,
                 eval_suite=self.eval_suite,
+                canary_steps=tuple(self.canary_steps),
                 promotion_gate=PromotionGate(
                     min_score=self.min_score,
                     must_not_regress=tuple(self.must_not_regress),
@@ -551,6 +585,7 @@ def _job_json(job: FineTuneJob) -> dict[str, Any]:
                 "min_score": job.spec.promotion_gate.min_score,
                 "must_not_regress": list(job.spec.promotion_gate.must_not_regress),
             },
+            "canary_steps": list(job.spec.canary_steps),
         },
         "status": {
             "phase": str(job.status.phase),
@@ -561,6 +596,14 @@ def _job_json(job: FineTuneJob) -> dict[str, Any]:
             "attempts": job.status.attempts,
             "scorecard": _scorecard_json(job.status.scorecard),
             "baseline": _scorecard_json(job.status.baseline),
+            "rollout": {
+                # -1 rather than null for "not started": a client walking the
+                # steps needs to tell "no rollout" from "at step 0, weight 0",
+                # and those are different situations.
+                "step": job.status.rollout_step,
+                "weight": job.status.rollout_weight,
+                "adapter_id": job.adapter_id if job.rolling_out else "",
+            },
         },
     }
 

@@ -806,3 +806,44 @@ async def test_a_score_outside_the_basis_point_range_is_refused(
     response = await training_client.post("/v1/finetune/jobs", json=_job_body(min_score=20_000))
 
     assert response.status_code == 422
+
+
+async def test_a_rollout_walks_the_steps_and_can_be_aborted(
+    training_client: AsyncClient,
+) -> None:
+    # The rollout is driven by an operator, not a timer. Without a health
+    # signal to advance on, a rollout that promoted itself would promote a bad
+    # adapter just as reliably as a good one — and a fine-tuned regression is
+    # silent, so nothing would notice.
+    await training_client.post("/v1/finetune/jobs", json=_job_body(canary_steps=[10, 50, 100]))
+
+    # It has to clear its gate first; a job still pending cannot roll out.
+    refused = await training_client.post("/v1/finetune/jobs/acme/support-triage-v3/rollout")
+    assert refused.status_code == 409
+    assert "cleared its gate" in refused.text
+
+
+async def test_canary_steps_are_recorded_on_the_spec(training_client: AsyncClient) -> None:
+    created = await training_client.post(
+        "/v1/finetune/jobs", json=_job_body(canary_steps=[2, 20, 100])
+    )
+
+    assert created.status_code == 201, created.text
+    assert created.json()["spec"]["canary_steps"] == [2, 20, 100]
+    rollout = created.json()["status"]["rollout"]
+    # -1 rather than null: a client walking the steps needs to tell "no
+    # rollout" from "at step 0, weight 0".
+    assert rollout["step"] == -1
+    assert rollout["weight"] == 0
+    assert rollout["adapter_id"] == ""
+
+
+async def test_steps_that_go_backwards_are_refused(training_client: AsyncClient) -> None:
+    # A rollout that goes backwards is a rollback, and a rollback is a snapshot
+    # version away rather than a step.
+    response = await training_client.post(
+        "/v1/finetune/jobs", json=_job_body(canary_steps=[50, 10])
+    )
+
+    assert response.status_code == 400
+    assert "ascend" in response.text

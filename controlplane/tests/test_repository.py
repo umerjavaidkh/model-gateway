@@ -24,7 +24,7 @@ from model_gateway_control.db.models import Base
 from model_gateway_control.db.repository import Repository
 from model_gateway_control.db.session import create_engine, session_factory
 from model_gateway_control.domain.budget import BudgetScope
-from model_gateway_control.domain.catalog import Capability, TrustTier
+from model_gateway_control.domain.catalog import Capability, RoutingKey, TrustTier
 from model_gateway_control.domain.component import Manifest, Port, Status
 from model_gateway_control.errors import NotFoundError
 from model_gateway_control.snapshot import build_snapshot
@@ -320,3 +320,96 @@ async def test_two_builds_of_the_same_database_agree(session: AsyncSession) -> N
 
     assert first.global_layer.version.digest == second.global_layer.version.digest
     assert first.tenants[0].version.digest == second.tenants[0].version.digest
+
+
+# --- adapters that are rolling out ------------------------------------------
+
+
+def _finetune_row(
+    name: str, *, step: int, weight: int, base: str = "gpt-4o-mini"
+) -> models.FineTuneJob:
+    return models.FineTuneJob(
+        tenant_id="acme",
+        name=name,
+        base_model=base,
+        trainer="llamafactory-lora",
+        trainer_version="1.0.0",
+        dataset_uri="s3://acme/train.jsonl",
+        dataset_checksum="sha256:" + "a" * 64,
+        dataset_rows=100,
+        dataset_schema_version="chatml-v1",
+        hyperparameters="{}",
+        idempotency_key="key-" + name,
+        phase="ready",
+        artifact_ref=f"adapters/acme/{name}",
+        rollout_step=step,
+        rollout_weight=weight,
+        canary_steps="[1, 5, 25, 100]",
+    )
+
+
+async def test_a_rolling_out_adapter_becomes_a_deployment(session: AsyncSession) -> None:
+    # The whole point of multi-LoRA: an adapter is not a new endpoint, it is
+    # the base model's deployment serving a second routing key. One vLLM pod
+    # holds many adapters and loads them by id.
+    await seed(session)
+    session.add(_finetune_row("support-v9", step=2, weight=5))
+    await session.flush()
+
+    fleet = await Repository(session).load_fleet()
+    by_key = {d.key: d for d in fleet.deployments}
+
+    host = by_key[RoutingKey(base_model="gpt-4o-mini", adapter_id="")]
+    adapter = by_key[RoutingKey(base_model="gpt-4o-mini", adapter_id="support-v9")]
+
+    assert adapter.weight == 5
+    # Everything about where it runs is the base deployment's, unchanged.
+    assert (adapter.provider, adapter.endpoint) == (host.provider, host.endpoint)
+    assert adapter.credential_ref == host.credential_ref
+    assert adapter.trust_tier is host.trust_tier
+    assert adapter.id != host.id
+
+
+async def test_a_job_that_has_not_started_rolling_out_is_not_a_deployment(
+    session: AsyncSession,
+) -> None:
+    # A trained artifact nobody has started a rollout for must not appear in
+    # the routing table at all.
+    await seed(session)
+    session.add(_finetune_row("not-started", step=-1, weight=0))
+    await session.flush()
+
+    fleet = await Repository(session).load_fleet()
+
+    assert not any(d.key.adapter_id == "not-started" for d in fleet.deployments)
+
+
+async def test_an_adapter_at_zero_traffic_is_still_in_the_table(
+    session: AsyncSession,
+) -> None:
+    # Being in the table at weight zero is what makes rollback a snapshot
+    # version rather than a redeployment.
+    await seed(session)
+    session.add(_finetune_row("at-zero", step=0, weight=0))
+    await session.flush()
+
+    fleet = await Repository(session).load_fleet()
+    adapter = next(d for d in fleet.deployments if d.key.adapter_id == "at-zero")
+
+    assert adapter.weight == 0
+
+
+async def test_an_adapter_whose_base_model_has_no_deployment_is_skipped(
+    session: AsyncSession,
+) -> None:
+    # One job pointing at a retired model must not stop every other tenant's
+    # configuration from compiling.
+    await seed(session)
+    session.add(_finetune_row("orphan", step=1, weight=1, base="a-model-nobody-serves"))
+    session.add(_finetune_row("fine", step=1, weight=1))
+    await session.flush()
+
+    fleet = await Repository(session).load_fleet()
+
+    assert not any(d.key.adapter_id == "orphan" for d in fleet.deployments)
+    assert any(d.key.adapter_id == "fine" for d in fleet.deployments)

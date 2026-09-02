@@ -753,3 +753,120 @@ async def test_the_contract_suite_catches_an_unstamped_scorecard() -> None:
 
     with pytest.raises(AssertionError, match="scorecard says suite"):
         await run_evaluator_suite(build)
+
+
+# --- weighted rollout -------------------------------------------------------
+
+
+async def ready_job(
+    sessions: async_sessionmaker[AsyncSession],
+    trainers: Trainers,
+    evaluators: Evaluators,
+    trainer: FakeTrainer,
+) -> None:
+    """Run a job all the way to READY."""
+    reconciler = await train_to_evaluating(
+        sessions, trainers, evaluators, trainer, gated_spec(min_score=8_700)
+    )
+    await reconciler.reconcile_once()
+
+
+def test_an_adapter_starts_at_zero_traffic() -> None:
+    # A fine-tuned regression is silent — no errors, just worse output — so the
+    # adapter enters the routing table and takes nothing until an operator says
+    # otherwise.
+    started = _ready().start_rollout()
+
+    assert started.rolling_out
+    assert started.status.rollout_weight == 0
+    assert started.status.rollout_step == 0
+
+
+def test_the_walk_follows_the_declared_steps() -> None:
+    walking = _ready().start_rollout()
+
+    weights = []
+    for _ in range(4):
+        walking = walking.advance_rollout()
+        weights.append(walking.status.rollout_weight)
+
+    assert weights == [1, 5, 25, 100]
+
+    with pytest.raises(ConflictError, match="no further steps"):
+        walking.advance_rollout()
+
+
+def test_an_abort_returns_the_adapter_to_zero_without_removing_it() -> None:
+    # It stays in the routing table: removing it would mean the next rollout
+    # starts from nothing, losing the record that this one happened — and an
+    # aborted rollout is exactly what someone will want to find later.
+    aborted = _ready().start_rollout().advance_rollout().advance_rollout().abort_rollout()
+
+    assert aborted.status.rollout_weight == 0
+    assert aborted.rolling_out
+    assert "aborted" in aborted.status.reason
+
+
+def test_only_an_artifact_that_cleared_its_gate_can_roll_out() -> None:
+    trained = job(job_spec=spec()).submitting().submitted("ext-1").trained("adapters/a")
+
+    with pytest.raises(ConflictError, match="cleared its gate"):
+        trained.start_rollout()
+
+
+def test_a_rollout_cannot_be_started_twice() -> None:
+    with pytest.raises(ConflictError, match="already rolling out"):
+        _ready().start_rollout().start_rollout()
+
+
+def test_advancing_without_a_rollout_is_refused() -> None:
+    with pytest.raises(ConflictError, match="no rollout to advance"):
+        _ready().advance_rollout()
+
+
+def test_canary_steps_must_ascend() -> None:
+    # A rollout that goes backwards is a rollback, and a rollback is a snapshot
+    # version away rather than a step.
+    with pytest.raises(InvalidRequestError, match="must ascend"):
+        spec(canary_steps=(25, 5))
+    with pytest.raises(InvalidRequestError, match="percentage above zero"):
+        spec(canary_steps=(0, 50))
+    with pytest.raises(InvalidRequestError, match="percentage above zero"):
+        spec(canary_steps=(50, 200))
+
+
+def _ready() -> FineTuneJob:
+    """A job that has cleared its gate, built without touching a database."""
+    from model_gateway_control.domain.scorecard import Decision
+
+    return (
+        job(job_spec=gated_spec(min_score=8_700))
+        .submitting()
+        .submitted("ext-1")
+        .trained("adapters/acme/support-triage-v3")
+        .evaluated(Decision(passed=True), Scorecard(score=9_100, suite="s", suite_version="1"))
+    )
+
+
+async def test_a_rollout_survives_the_round_trip(
+    sessions: async_sessionmaker[AsyncSession],
+    trainer: FakeTrainer,
+    trainers: Trainers,
+    evaluators: Evaluators,
+) -> None:
+    await ready_job(sessions, trainers, evaluators, trainer)
+
+    async with sessions() as session:
+        service = FineTuneService(session, trainers, evaluators)
+        await service.start_rollout("acme", "support-triage-v3")
+        await service.advance_rollout("acme", "support-triage-v3")
+        await session.commit()
+
+    async with sessions() as session:
+        stored = await FineTuneService(session, trainers, evaluators).get(
+            "acme", "support-triage-v3"
+        )
+
+    assert stored.status.rollout_weight == 1
+    assert stored.status.rollout_step == 1
+    assert stored.spec.canary_steps == (1, 5, 25, 100)

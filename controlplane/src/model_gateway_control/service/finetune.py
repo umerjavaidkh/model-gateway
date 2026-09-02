@@ -196,6 +196,7 @@ class FineTuneService:
             eval_suite=job.spec.eval_suite,
             gate_min_score=job.spec.promotion_gate.min_score,
             gate_must_not_regress=json.dumps(list(job.spec.promotion_gate.must_not_regress)),
+            canary_steps=json.dumps(list(job.spec.canary_steps)),
             idempotency_key=job.idempotency_key,
             phase=str(Phase.PENDING),
         )
@@ -213,6 +214,26 @@ class FineTuneService:
         if tenant is not None:
             query = query.where(models.FineTuneJob.tenant_id == tenant)
         return [to_job(row) for row in (await self._session.scalars(query)).all()]
+
+    async def start_rollout(self, tenant: str, name: str) -> FineTuneJob:
+        """Put a cleared artifact into the routing table at zero traffic."""
+        return await self._rollout(tenant, name, lambda job: job.start_rollout())
+
+    async def advance_rollout(self, tenant: str, name: str) -> FineTuneJob:
+        """Take the next canary step."""
+        return await self._rollout(tenant, name, lambda job: job.advance_rollout())
+
+    async def abort_rollout(self, tenant: str, name: str, reason: str = "") -> FineTuneJob:
+        """Return the adapter to zero traffic."""
+        return await self._rollout(
+            tenant, name, lambda job: job.abort_rollout(reason or "aborted by an operator")
+        )
+
+    async def _rollout(
+        self, tenant: str, name: str, step: Callable[[FineTuneJob], FineTuneJob]
+    ) -> FineTuneJob:
+        row = await self._require(tenant, name)
+        return self._store(row, step(to_job(row)))
 
     async def cancel(self, tenant: str, name: str) -> FineTuneJob:
         """Stop a job, telling the trainer if it has one."""
@@ -418,6 +439,8 @@ def _apply_status(row: models.FineTuneJob, status: Status, when: datetime) -> No
     row.reason = status.reason
     row.cost_micro_usd = status.cost_micro_usd
     row.attempts = status.attempts
+    row.rollout_step = status.rollout_step
+    row.rollout_weight = status.rollout_weight
     row.scorecard = encode_scorecard(status.scorecard)
     row.baseline = encode_scorecard(status.baseline)
     row.updated_at = when
@@ -496,6 +519,7 @@ def to_job(row: models.FineTuneJob) -> FineTuneJob:
                 min_score=row.gate_min_score,
                 must_not_regress=tuple(json.loads(row.gate_must_not_regress or "[]")),
             ),
+            canary_steps=tuple(json.loads(row.canary_steps or "[]")),
         ),
         status=Status(
             phase=Phase(row.phase),
@@ -504,6 +528,8 @@ def to_job(row: models.FineTuneJob) -> FineTuneJob:
             reason=row.reason,
             cost_micro_usd=row.cost_micro_usd,
             attempts=row.attempts,
+            rollout_step=row.rollout_step,
+            rollout_weight=row.rollout_weight,
             scorecard=decode_scorecard(row.scorecard),
             baseline=decode_scorecard(row.baseline),
             updated_at=row.updated_at,

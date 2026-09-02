@@ -181,4 +181,5 @@ decided and why.
 | M10d — Signed manifests | **done** |
 | M11a — Fine-tuning: TrainerPort, FineTuneJob reconciler | **done** |
 | M11b — Eval gate: EvalPort, scorecards, promotion gate | **done** |
-| M11c — Weighted rollout: shadow, canary, multi-LoRA routing | next |
+| M11c — Weighted rollout: canary steps, multi-LoRA routing | **done** |
+| M11d — Shadow traffic: mirrored scoring, automatic promotion | next |
