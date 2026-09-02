@@ -174,8 +174,9 @@ _TEMPLATE = """<!doctype html>
       <datalist id="models"></datalist>
     </div>
     <p class="muted" style="margin:0 0 10px;font-size:12px">
-      This posts through the gateway with a tenant key, not the admin token —
-      the same path any client takes. Every send shows up in Traffic.
+      This posts through the gateway with a <b>tenant key</b> (<code>gw_…</code>),
+      not the admin token above — the same path any client takes, so it can only
+      spend that tenant&rsquo;s budget. Every send shows up in Traffic.
     </p>
     <textarea id="prompt" rows="4" placeholder="Ask the model something. ⌘/Ctrl+Enter sends."></textarea>
     <div class="row" style="margin:10px 0 0">
@@ -345,16 +346,29 @@ function show(r) {
 // The model names come from the admin API, so the operator picks a served
 // model instead of guessing one and reading a 404 as an outage.
 async function loadModels() {
-  if (!value($("token"))) return;
+  if (!value($("token"))) { ready(); return; }
   try {
     const { deployments } = await api("/v1/deployments");
     const names = [...new Set(deployments.map((d) => d.adapter_id || d.base_model))].sort();
     $("models").innerHTML = names.map((n) => `<option value="${escape(n)}">`).join("");
     if (!value($("model")) && names.length) $("model").value = names[0];
-  } catch {
-    // A missing model list is a smaller problem than a blocked chat tab: the
-    // field takes any name typed into it.
+  } catch (err) {
+    // Not swallowed. A chat tab with an empty model list and no explanation
+    // looks like the gateway serving nothing, when the actual cause is one
+    // rejected call — and the field still takes any name typed into it.
+    $("chat-status").textContent = "could not list models: " + err.message;
   }
+  ready();
+}
+
+// Say what is missing before Send is pressed, not after a prompt is typed.
+function ready() {
+  const missing = [];
+  if (!value($("gw-key"))) missing.push("a gateway key");
+  if (!value($("model"))) missing.push("a model");
+  $("send").disabled = missing.length > 0;
+  if (missing.length) $("chat-status").textContent = "needs " + missing.join(" and ");
+  else if ($("chat-status").textContent.startsWith("needs ")) $("chat-status").textContent = "";
 }
 
 const turns = [];
@@ -365,10 +379,7 @@ async function send() {
   const url = value($("gw-url")) || GATEWAY_URL_DEFAULT;
   const key = value($("gw-key"));
   const model = value($("model"));
-  if (!key || !model) {
-    $("chat-status").textContent = "a gateway key and a model are both needed";
-    return;
-  }
+  if (!key || !model) { ready(); return; }
 
   $("send").disabled = true;
   $("chat-status").textContent = "sending…";
@@ -446,6 +457,10 @@ async function trace(requestId) {
       err.message.includes("404") ? "not recorded yet — try again in a second" : err.message;
   }
 }
+
+$("gw-key").addEventListener("input", ready);
+$("model").addEventListener("input", ready);
+ready();
 
 $("send").onclick = send;
 $("prompt").addEventListener("keydown", (e) => {
