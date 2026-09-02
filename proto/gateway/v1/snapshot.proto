@@ -96,6 +96,14 @@ message Deployment {
   // Share of traffic, 0-100. Zero means registered but not serving — the state
   // a fine-tuned adapter sits in while it takes shadow traffic.
   uint32 weight = 8;
+  // Share of the *base model's* traffic mirrored to this deployment, 0-100.
+  // A separate dimension from weight: an adapter in shadow serves nobody
+  // (weight 0) while seeing real requests, and the response is discarded.
+  //
+  // Sampled rather than all-or-nothing because mirroring doubles inference
+  // spend for whatever fraction it covers, and a shadow that costs as much as
+  // production is one an operator turns off.
+  uint32 shadow_percent = 11;
   Cost cost = 9;
   repeated string capabilities = 10;
 }

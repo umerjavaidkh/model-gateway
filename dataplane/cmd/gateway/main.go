@@ -38,6 +38,7 @@ import (
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/pii"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/router"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/secrets"
+	"github.com/umerjavaidkh/model-gateway/dataplane/internal/shadow"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/snapshot"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/telemetry"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/tracing"
@@ -312,7 +313,26 @@ func run(logger *slog.Logger) error {
 	prober.Start(ctx)
 	defer prober.Stop()
 
-	pipeline, err := gateway.New(providers, credentials, cfg.KeyPepper,
+	// Mirroring served requests to adapters nobody is routed to yet. The
+	// closure is why this is declared before the pipeline: the mirror needs
+	// something to call and the pipeline needs the mirror, and the call only
+	// happens once both exist.
+	var pipeline *gateway.Pipeline
+	mirror, err := shadow.New(
+		func(ctx context.Context, d core.Deployment, req *shadow.Request) error {
+			return pipeline.ShadowCall(ctx, d, req)
+		},
+		shadow.WithLogger(logger))
+	if err != nil {
+		return err
+	}
+	mirror.Start(ctx)
+	// Drained after the HTTP server, like the guardrail chain: the last
+	// requests before a deploy are the ones a rollout decision is about, and
+	// losing them makes a canary look quiet rather than healthy.
+	defer mirror.Wait()
+
+	pipeline, err = gateway.New(providers, credentials, cfg.KeyPepper,
 		gateway.WithTelemetry(emitter),
 		gateway.WithLimiter(limiter),
 		gateway.WithRouter(rt),
@@ -320,6 +340,7 @@ func run(logger *slog.Logger) error {
 		gateway.WithGuardrails(guardrailChain),
 		gateway.WithVault(vault),
 		gateway.WithNERDetector(nerDetector),
+		gateway.WithShadows(mirror),
 		gateway.WithLogger(logger))
 	if err != nil {
 		return err

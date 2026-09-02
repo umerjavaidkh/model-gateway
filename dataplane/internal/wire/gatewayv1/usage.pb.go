@@ -144,7 +144,12 @@ type UsageEvent struct {
 	// when it was served rather than looked up later. A budget detached from a
 	// key afterwards would otherwise lose the spend that was incurred while it
 	// was attached, and the arithmetic would quietly stop matching the invoice.
-	BudgetIds     []string `protobuf:"bytes,18,rep,name=budget_ids,json=budgetIds,proto3" json:"budget_ids,omitempty"`
+	BudgetIds []string `protobuf:"bytes,18,rep,name=budget_ids,json=budgetIds,proto3" json:"budget_ids,omitempty"`
+	// shadow marks a mirrored request: one nobody was waiting for, whose answer
+	// was discarded. It cost real money and belongs in the record, but it is not
+	// traffic anybody was served — so accounting must be able to tell it apart
+	// rather than charging a tenant for requests they did not make.
+	Shadow        bool `protobuf:"varint,19,opt,name=shadow,proto3" json:"shadow,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -305,6 +310,13 @@ func (x *UsageEvent) GetBudgetIds() []string {
 	return nil
 }
 
+func (x *UsageEvent) GetShadow() bool {
+	if x != nil {
+		return x.Shadow
+	}
+	return false
+}
+
 var File_gateway_v1_usage_proto protoreflect.FileDescriptor
 
 const file_gateway_v1_usage_proto_rawDesc = "" +
@@ -317,7 +329,7 @@ const file_gateway_v1_usage_proto_rawDesc = "" +
 	"\fcached_input\x18\x02 \x01(\x03R\vcachedInput\x12\x1f\n" +
 	"\vcache_write\x18\x03 \x01(\x03R\n" +
 	"cacheWrite\x12\x16\n" +
-	"\x06output\x18\x04 \x01(\x03R\x06output\"\xdd\x04\n" +
+	"\x06output\x18\x04 \x01(\x03R\x06output\"\xf5\x04\n" +
 	"\n" +
 	"UsageEvent\x12\x1d\n" +
 	"\n" +
@@ -345,7 +357,8 @@ const file_gateway_v1_usage_proto_rawDesc = "" +
 	"\aoutcome\x18\x10 \x01(\tR\aoutcome\x12)\n" +
 	"\x10snapshot_version\x18\x11 \x01(\x04R\x0fsnapshotVersion\x12\x1d\n" +
 	"\n" +
-	"budget_ids\x18\x12 \x03(\tR\tbudgetIdsBIZGgithub.com/umerjavaidkh/model-gateway/dataplane/internal/wire/gatewayv1b\x06proto3"
+	"budget_ids\x18\x12 \x03(\tR\tbudgetIds\x12\x16\n" +
+	"\x06shadow\x18\x13 \x01(\bR\x06shadowBIZGgithub.com/umerjavaidkh/model-gateway/dataplane/internal/wire/gatewayv1b\x06proto3"
 
 var (
 	file_gateway_v1_usage_proto_rawDescOnce sync.Once

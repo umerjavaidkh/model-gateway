@@ -45,6 +45,10 @@ type UsageEvent struct {
 	// unlike the tenant id it is safe as a metrics label.
 	Provider string
 	Stream   bool
+	// Shadow marks a mirrored request: one nobody was waiting for, whose
+	// answer was discarded. It cost real money and belongs in the record, but
+	// it is not traffic anybody was served.
+	Shadow bool
 
 	InputTokens  int64
 	OutputTokens int64

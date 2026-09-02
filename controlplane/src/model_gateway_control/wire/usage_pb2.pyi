@@ -18,7 +18,7 @@ class TokenUsage(_message.Message):
     def __init__(self, input: _Optional[int] = ..., cached_input: _Optional[int] = ..., cache_write: _Optional[int] = ..., output: _Optional[int] = ...) -> None: ...
 
 class UsageEvent(_message.Message):
-    __slots__ = ("request_id", "timestamp_unix_ms", "tenant", "key_id", "tier", "deployment", "base_model", "adapter_id", "provider", "stream", "usage", "cost_micro_usd", "price_micro_usd", "latency_ms", "time_to_first_byte_ms", "outcome", "snapshot_version", "budget_ids")
+    __slots__ = ("request_id", "timestamp_unix_ms", "tenant", "key_id", "tier", "deployment", "base_model", "adapter_id", "provider", "stream", "usage", "cost_micro_usd", "price_micro_usd", "latency_ms", "time_to_first_byte_ms", "outcome", "snapshot_version", "budget_ids", "shadow")
     REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
     TIMESTAMP_UNIX_MS_FIELD_NUMBER: _ClassVar[int]
     TENANT_FIELD_NUMBER: _ClassVar[int]
@@ -37,6 +37,7 @@ class UsageEvent(_message.Message):
     OUTCOME_FIELD_NUMBER: _ClassVar[int]
     SNAPSHOT_VERSION_FIELD_NUMBER: _ClassVar[int]
     BUDGET_IDS_FIELD_NUMBER: _ClassVar[int]
+    SHADOW_FIELD_NUMBER: _ClassVar[int]
     request_id: str
     timestamp_unix_ms: int
     tenant: str
@@ -55,4 +56,5 @@ class UsageEvent(_message.Message):
     outcome: str
     snapshot_version: int
     budget_ids: _containers.RepeatedScalarFieldContainer[str]
-    def __init__(self, request_id: _Optional[str] = ..., timestamp_unix_ms: _Optional[int] = ..., tenant: _Optional[str] = ..., key_id: _Optional[str] = ..., tier: _Optional[str] = ..., deployment: _Optional[str] = ..., base_model: _Optional[str] = ..., adapter_id: _Optional[str] = ..., provider: _Optional[str] = ..., stream: bool = ..., usage: _Optional[_Union[TokenUsage, _Mapping]] = ..., cost_micro_usd: _Optional[int] = ..., price_micro_usd: _Optional[int] = ..., latency_ms: _Optional[int] = ..., time_to_first_byte_ms: _Optional[int] = ..., outcome: _Optional[str] = ..., snapshot_version: _Optional[int] = ..., budget_ids: _Optional[_Iterable[str]] = ...) -> None: ...
+    shadow: bool
+    def __init__(self, request_id: _Optional[str] = ..., timestamp_unix_ms: _Optional[int] = ..., tenant: _Optional[str] = ..., key_id: _Optional[str] = ..., tier: _Optional[str] = ..., deployment: _Optional[str] = ..., base_model: _Optional[str] = ..., adapter_id: _Optional[str] = ..., provider: _Optional[str] = ..., stream: bool = ..., usage: _Optional[_Union[TokenUsage, _Mapping]] = ..., cost_micro_usd: _Optional[int] = ..., price_micro_usd: _Optional[int] = ..., latency_ms: _Optional[int] = ..., time_to_first_byte_ms: _Optional[int] = ..., outcome: _Optional[str] = ..., snapshot_version: _Optional[int] = ..., budget_ids: _Optional[_Iterable[str]] = ..., shadow: bool = ...) -> None: ...

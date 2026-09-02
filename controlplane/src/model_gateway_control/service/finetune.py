@@ -57,6 +57,8 @@ from model_gateway_control.domain.scorecard import (
 )
 from model_gateway_control.errors import ConflictError, InvalidRequestError, NotFoundError
 from model_gateway_control.service.evaluator import EvalPort, Target
+from model_gateway_control.service.rollout import Policy as RolloutPolicy
+from model_gateway_control.service.rollout import RolloutHealth
 from model_gateway_control.service.trainer import RunState, TrainerPort
 
 logger = logging.getLogger(__name__)
@@ -197,6 +199,7 @@ class FineTuneService:
             gate_min_score=job.spec.promotion_gate.min_score,
             gate_must_not_regress=json.dumps(list(job.spec.promotion_gate.must_not_regress)),
             canary_steps=json.dumps(list(job.spec.canary_steps)),
+            shadow_percent=job.spec.shadow_percent,
             idempotency_key=job.idempotency_key,
             phase=str(Phase.PENDING),
         )
@@ -285,11 +288,101 @@ class Reconciler:
         trainers: Trainers | None = None,
         evaluators: Evaluators | None = None,
         now: Clock | None = None,
+        health: RolloutPolicy | None = None,
     ) -> None:
         self._sessions = sessions
         self._trainers = trainers or Trainers()
         self._evaluators = evaluators or Evaluators()
         self._now = now or _utcnow
+        # None disables automatic advancement entirely: a deployment that wants
+        # an operator to walk every step gets exactly that, rather than an
+        # automation it has to remember to turn off.
+        self._health = health
+
+    async def advance_rollouts(self) -> list[Outcome]:
+        """Move canaries a step, or take them out, on what traffic did.
+
+        A separate pass from reconcile_once because it answers a different
+        question about a different set of jobs: those are jobs on their way to
+        an artifact, these are artifacts on their way into production. Folding
+        them together would mean a training backlog delayed a rollout decision
+        and a stuck rollout looked like a training problem.
+
+        Health is measured, never assumed. A rollout with no evidence waits
+        rather than advancing — see service/rollout.py for why the three
+        outcomes are advance, abort and wait rather than a boolean.
+        """
+        if self._health is None:
+            return []
+
+        async with self._sessions() as session:
+            candidates = [
+                row.id
+                for row in (
+                    await session.scalars(
+                        select(models.FineTuneJob).where(
+                            models.FineTuneJob.rollout_step >= 0,
+                            models.FineTuneJob.rollout_weight < 100,
+                        )
+                    )
+                ).all()
+            ]
+
+        outcomes = []
+        for job_id in candidates:
+            outcome = await self._advance_rollout(job_id)
+            if outcome is not None:
+                outcomes.append(outcome)
+        return outcomes
+
+    async def _advance_rollout(self, job_id: int) -> Outcome | None:
+        async with self._sessions() as session:
+            row = await session.get(
+                models.FineTuneJob, job_id, with_for_update={"skip_locked": True}
+            )
+            if row is None or row.rollout_step < 0 or row.rollout_weight >= 100:
+                return None
+
+            job = to_job(row)
+            health = self._health_for(session)
+            # updated_at is when this step began: every status write sets it,
+            # and a step is a status write.
+            started_at = row.updated_at or self._now()
+
+            try:
+                verdict = await health.judge(
+                    adapter=f"{row.tenant_id}-{row.name}",
+                    base=row.base_model,
+                    started_at=started_at,
+                    now=self._now(),
+                )
+            except Exception as exc:
+                # A rollout that cannot be judged is left where it is. Guessing
+                # would mean advancing on no evidence or aborting on a database
+                # blip, and both are worse than waiting.
+                logger.warning("rollout for %s could not be judged: %s", job.ref, exc)
+                return None
+
+            if verdict.wait:
+                logger.debug("rollout for %s waiting: %s", job.ref, verdict.reason)
+                return None
+
+            advanced = (
+                job.advance_rollout() if verdict.advance else job.abort_rollout(verdict.reason)
+            )
+            _apply_status(row, advanced.status, self._now())
+            await session.commit()
+
+            logger.info(
+                "rollout for %s %s: %s",
+                job.ref,
+                "advanced" if verdict.advance else "aborted",
+                verdict.reason,
+            )
+            return Outcome(job=advanced, advanced=True)
+
+    def _health_for(self, session: AsyncSession) -> RolloutHealth:
+        return RolloutHealth(session, self._health)
 
     async def reconcile_once(self) -> list[Outcome]:
         """Advance every job that has work outstanding.
@@ -520,6 +613,7 @@ def to_job(row: models.FineTuneJob) -> FineTuneJob:
                 must_not_regress=tuple(json.loads(row.gate_must_not_regress or "[]")),
             ),
             canary_steps=tuple(json.loads(row.canary_steps or "[]")),
+            shadow_percent=row.shadow_percent,
         ),
         status=Status(
             phase=Phase(row.phase),

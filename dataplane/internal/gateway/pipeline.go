@@ -21,6 +21,7 @@ import (
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/pii"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/policy"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/router"
+	"github.com/umerjavaidkh/model-gateway/dataplane/internal/shadow"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/tracing"
 )
 
@@ -88,8 +89,11 @@ type Pipeline struct {
 	policies    *policy.Cache
 	vault       *pii.Vault
 	ner         pii.Detector
-	logger      *slog.Logger
-	region      string
+	// shadows mirrors served requests to adapters nobody is routed to yet.
+	// Optional: a deployment running no canaries starts no mirror at all.
+	shadows *shadow.Mirror
+	logger  *slog.Logger
+	region  string
 	// pepper keys the HMAC that turns a presented key secret into the value a
 	// snapshot indexes principals by. It never enters a snapshot, so a stolen
 	// snapshot yields no usable key.
@@ -139,6 +143,15 @@ func WithGuardrails(chain GuardrailChain) Option {
 // the log rather than pretending it ran.
 func WithNERDetector(detector pii.Detector) Option {
 	return func(p *Pipeline) { p.ner = detector }
+}
+
+// WithShadows enables mirroring served requests to shadowing adapters.
+//
+// A *shadow.Mirror rather than an interface: there is one implementation, the
+// contract it has to keep is "never touches the caller", and an interface here
+// would invite a second implementation that does not keep it.
+func WithShadows(mirror *shadow.Mirror) Option {
+	return func(p *Pipeline) { p.shadows = mirror }
 }
 
 // WithLogger sets where the pipeline reports.
@@ -331,7 +344,128 @@ func (p *Pipeline) Handle(ctx context.Context, snap *core.Snapshot, req *Request
 	// to limiting something that is only measurable afterwards.
 	p.limiter.RecordTokens(ctx, &principal, resp.Usage.Total())
 	emit(nil)
+
+	// Last, and after the usage event: mirroring is the least important thing
+	// this request does, and putting it here means a change to it cannot move
+	// anything the caller depends on. Send never blocks and never fails.
+	p.mirror(snap, deployment, req, &principal)
 	return result, nil
+}
+
+// mirror hands a copy of a served request to whatever is shadowing.
+//
+// The body is the one that arrived, not the one that was sent upstream: the
+// shadow runs the whole per-attempt transform itself, against its own trust
+// tier. A shadow handed a payload redacted for a different destination would
+// be measured on input production never sees.
+func (p *Pipeline) mirror(
+	snap *core.Snapshot, served core.Deployment, req *Request, principal *core.Principal,
+) {
+	if p.shadows == nil {
+		return
+	}
+	p.shadows.Send(snap, served, &shadow.Request{
+		Meta:            req.Meta,
+		Body:            req.Body,
+		Tenant:          principal.Tenant,
+		Principal:       principal.KeyID,
+		Tier:            snap.Tier(principal.Tenant),
+		SnapshotVersion: snap.GlobalVersion().Number,
+		BudgetIDs:       budgetIDs(principal.Budgets),
+	})
+}
+
+// ShadowCall runs one mirrored request. It is what a shadow.Mirror calls.
+//
+// The same path a real request takes, minus the caller: credentials resolved
+// for this deployment, the payload transformed for *its* trust tier, and a
+// usage event emitted marked as shadow. Reusing the transform is the point —
+// a shadow measured on a payload production never sends is measuring something
+// else.
+//
+// The response is read for its token counts and then dropped. Nothing is
+// restored, nothing is returned, and no caller ever sees it.
+func (p *Pipeline) ShadowCall(
+	ctx context.Context, deployment core.Deployment, req *shadow.Request,
+) error {
+	started := p.now()
+
+	provider, ok := p.providers.Provider(deployment.Provider)
+	if !ok {
+		return core.Newf(core.CodeInternal, "no provider %q for shadow %s",
+			deployment.Provider, deployment.ID)
+	}
+
+	credential, err := p.credentials.Resolve(ctx, deployment.CredentialRef)
+	if err != nil {
+		return err
+	}
+
+	// A principal shaped for the transform, carrying only what it reads. The
+	// real one is not held across the queue, for the same reason the snapshot
+	// is not.
+	principal := core.Principal{Tenant: req.Tenant, KeyID: req.Principal}
+	body, _, err := p.protect(ctx, &principal, &Request{Meta: req.Meta, Body: req.Body}, deployment)
+	if err != nil {
+		return err
+	}
+
+	response, err := provider.Invoke(ctx, &core.ProviderCall{
+		Deployment: deployment, Meta: req.Meta, Body: body, Credential: credential,
+	})
+
+	usage := core.TokenUsage{}
+	if response != nil {
+		usage = response.Usage
+	}
+	p.emitShadowUsage(ctx, deployment, req, usage, p.now().Sub(started), err)
+	return err
+}
+
+// emitShadowUsage records what a mirrored request cost.
+//
+// A separate event with a derived id, not a second event under the request's
+// own id: usage records are keyed by request id for idempotency, so reusing it
+// would make the accounting consumer discard one of the two as a duplicate —
+// and which one it discarded would depend on arrival order.
+func (p *Pipeline) emitShadowUsage(
+	ctx context.Context,
+	d core.Deployment,
+	req *shadow.Request,
+	usage core.TokenUsage,
+	latency time.Duration,
+	err error,
+) {
+	outcome := core.CodeOf(err)
+	if err == nil {
+		outcome = ""
+	}
+	cost := d.Cost.For(usage)
+
+	_ = p.telemetry.Emit(ctx, core.UsageEvent{
+		RequestID:         req.Meta.RequestID + ":shadow:" + string(d.ID),
+		Timestamp:         p.now(),
+		Tenant:            req.Tenant,
+		KeyID:             req.Principal,
+		Tier:              req.Tier,
+		Deployment:        d.ID,
+		Route:             d.Key,
+		Provider:          d.Provider,
+		Shadow:            true,
+		InputTokens:       usage.Input,
+		CachedInputTokens: usage.CachedInput,
+		CacheWriteTokens:  usage.CacheWrite,
+		OutputTokens:      usage.Output,
+		CostMicroUSD:      cost,
+		// Cost, not price. Nobody asked for this request, so charging a tenant
+		// for it would bill them for an experiment the platform chose to run.
+		// Recording the cost keeps the experiment's spend visible.
+		PriceMicroUSD:   0,
+		LatencyMs:       latency.Milliseconds(),
+		Outcome:         outcome,
+		SnapshotVersion: req.SnapshotVersion,
+		Budgets:         req.BudgetIDs,
+	})
 }
 
 // stage runs one pipeline stage inside its own span.

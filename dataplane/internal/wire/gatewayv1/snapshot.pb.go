@@ -517,7 +517,15 @@ type Deployment struct {
 	CredentialRef string `protobuf:"bytes,7,opt,name=credential_ref,json=credentialRef,proto3" json:"credential_ref,omitempty"`
 	// Share of traffic, 0-100. Zero means registered but not serving — the state
 	// a fine-tuned adapter sits in while it takes shadow traffic.
-	Weight        uint32   `protobuf:"varint,8,opt,name=weight,proto3" json:"weight,omitempty"`
+	Weight uint32 `protobuf:"varint,8,opt,name=weight,proto3" json:"weight,omitempty"`
+	// Share of the *base model's* traffic mirrored to this deployment, 0-100.
+	// A separate dimension from weight: an adapter in shadow serves nobody
+	// (weight 0) while seeing real requests, and the response is discarded.
+	//
+	// Sampled rather than all-or-nothing because mirroring doubles inference
+	// spend for whatever fraction it covers, and a shadow that costs as much as
+	// production is one an operator turns off.
+	ShadowPercent uint32   `protobuf:"varint,11,opt,name=shadow_percent,json=shadowPercent,proto3" json:"shadow_percent,omitempty"`
 	Cost          *Cost    `protobuf:"bytes,9,opt,name=cost,proto3" json:"cost,omitempty"`
 	Capabilities  []string `protobuf:"bytes,10,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -606,6 +614,13 @@ func (x *Deployment) GetCredentialRef() string {
 func (x *Deployment) GetWeight() uint32 {
 	if x != nil {
 		return x.Weight
+	}
+	return 0
+}
+
+func (x *Deployment) GetShadowPercent() uint32 {
+	if x != nil {
+		return x.ShadowPercent
 	}
 	return 0
 }
@@ -1873,7 +1888,7 @@ const file_gateway_v1_snapshot_proto_rawDesc = "" +
 	"\x16input_per_1k_micro_usd\x18\x01 \x01(\x03R\x12inputPer1kMicroUsd\x124\n" +
 	"\x17output_per_1k_micro_usd\x18\x02 \x01(\x03R\x13outputPer1kMicroUsd\x12?\n" +
 	"\x1dcached_input_per_1k_micro_usd\x18\x03 \x01(\x03R\x18cachedInputPer1kMicroUsd\x12=\n" +
-	"\x1ccache_write_per_1k_micro_usd\x18\x04 \x01(\x03R\x17cacheWritePer1kMicroUsd\"\xd5\x02\n" +
+	"\x1ccache_write_per_1k_micro_usd\x18\x04 \x01(\x03R\x17cacheWritePer1kMicroUsd\"\xfc\x02\n" +
 	"\n" +
 	"Deployment\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12(\n" +
@@ -1884,7 +1899,8 @@ const file_gateway_v1_snapshot_proto_rawDesc = "" +
 	"\n" +
 	"trust_tier\x18\x06 \x01(\x0e2\x15.gateway.v1.TrustTierR\ttrustTier\x12%\n" +
 	"\x0ecredential_ref\x18\a \x01(\tR\rcredentialRef\x12\x16\n" +
-	"\x06weight\x18\b \x01(\rR\x06weight\x12$\n" +
+	"\x06weight\x18\b \x01(\rR\x06weight\x12%\n" +
+	"\x0eshadow_percent\x18\v \x01(\rR\rshadowPercent\x12$\n" +
 	"\x04cost\x18\t \x01(\v2\x10.gateway.v1.CostR\x04cost\x12\"\n" +
 	"\fcapabilities\x18\n" +
 	" \x03(\tR\fcapabilities\"R\n" +

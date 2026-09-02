@@ -45,6 +45,12 @@ func (c *collector) only(t *testing.T) core.UsageEvent {
 	return c.events[0]
 }
 
+func (c *collector) all() []core.UsageEvent {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]core.UsageEvent(nil), c.events...)
+}
+
 func pipelineWithCollector(t *testing.T) (*gateway.Pipeline, *collector) {
 	t.Helper()
 	c := &collector{}

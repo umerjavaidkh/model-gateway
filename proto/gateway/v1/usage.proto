@@ -72,4 +72,10 @@ message UsageEvent {
   // key afterwards would otherwise lose the spend that was incurred while it
   // was attached, and the arithmetic would quietly stop matching the invoice.
   repeated string budget_ids = 18;
+
+  // shadow marks a mirrored request: one nobody was waiting for, whose answer
+  // was discarded. It cost real money and belongs in the record, but it is not
+  // traffic anybody was served — so accounting must be able to tell it apart
+  // rather than charging a tenant for requests they did not make.
+  bool shadow = 19;
 }

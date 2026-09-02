@@ -323,6 +323,7 @@ def _encode_deployment(d: Deployment) -> pb.Deployment:
         trust_tier=_TRUST_TIERS.get(d.trust_tier, pb.TRUST_TIER_UNSPECIFIED),
         credential_ref=d.credential_ref,
         weight=d.weight,
+        shadow_percent=d.shadow_percent,
         cost=_encode_cost(d.cost),
         capabilities=[str(c) for c in d.capabilities],
     )

@@ -151,6 +151,7 @@ func encode(e core.UsageEvent) *pb.UsageEvent {
 		Deployment:      string(e.Deployment),
 		BaseModel:       e.Route.BaseModel,
 		AdapterId:       e.Route.AdapterID,
+		Shadow:          e.Shadow,
 		Provider:        e.Provider,
 		Stream:          e.Stream,
 		Usage: &pb.TokenUsage{

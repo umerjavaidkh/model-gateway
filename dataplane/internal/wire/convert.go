@@ -216,6 +216,7 @@ func decodeDeployment(d *pb.Deployment) core.Deployment {
 		},
 	}
 	out.Weight = d.GetWeight()
+	out.ShadowPercent = d.GetShadowPercent()
 	for _, c := range d.GetCapabilities() {
 		out.Capabilities = append(out.Capabilities, core.Capability(c))
 	}
@@ -232,6 +233,7 @@ func encodeDeployment(d core.Deployment) *pb.Deployment {
 		TrustTier:     encodeTrustTier(d.TrustTier),
 		CredentialRef: d.CredentialRef,
 		Weight:        d.Weight,
+		ShadowPercent: d.ShadowPercent,
 		Cost: &pb.Cost{
 			InputPer_1KMicroUsd:       int64(d.Cost.InputPer1K),
 			OutputPer_1KMicroUsd:      int64(d.Cost.OutputPer1K),

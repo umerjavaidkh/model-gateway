@@ -38,6 +38,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    false,
     func,
     text,
 )
@@ -577,6 +578,17 @@ class UsageRecord(Base):
     price_micro_usd: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     outcome: Mapped[str] = mapped_column(String(64), nullable=False, default="")
 
+    #: Which deployment served it. Indexed because the question this exists to
+    #: answer — is this canary healthy — is asked per deployment over a window,
+    #: and without attribution it cannot be asked at all.
+    deployment: Mapped[str] = mapped_column(
+        String(128), nullable=False, index=True, server_default=text("''")
+    )
+    #: Whether this was a mirrored request nobody was waiting for. Kept apart
+    #: from real traffic: a shadow's errors are a finding about an adapter, not
+    #: an incident about a tenant's requests.
+    shadow: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=false())
+
 
 class PolicyRule(Base, TimestampMixin):
     """One rule of a tenant's policy, in evaluation order.
@@ -708,3 +720,6 @@ class FineTuneJob(Base, TimestampMixin):
     canary_steps: Mapped[str] = mapped_column(
         Text, nullable=False, server_default=text("'[1, 5, 25, 100]'")
     )
+    #: Share of the base model's traffic mirrored while the adapter is at zero
+    #: weight.
+    shadow_percent: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("10"))
