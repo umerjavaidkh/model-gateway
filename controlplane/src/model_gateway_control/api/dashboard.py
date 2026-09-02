@@ -131,6 +131,7 @@ _TEMPLATE = """<!doctype html>
   <div class="tabs">
     <button id="tab-traffic" class="on">Traffic</button>
     <button id="tab-chat">Chat</button>
+    <button id="tab-audit">Audit</button>
   </div>
   <input id="token" type="password" placeholder="admin token" size="26"
          autocomplete="off" spellcheck="false">
@@ -187,6 +188,33 @@ _TEMPLATE = """<!doctype html>
   <div class="panel" id="transcript"><p class="muted">Nothing sent yet.</p></div>
 </main>
 
+<main id="audit" hidden>
+  <div class="row">
+    <button id="audit-all" class="on">Latest 100</button>
+    <button id="audit-refused">Refusals only</button>
+    <button id="audit-refresh">Refresh</button>
+    <span id="chain" class="muted"></span>
+  </div>
+  <p class="muted" style="margin:0;font-size:12px;max-width:80ch">
+    <b>Decisions, not measurements.</b> Refusals, redactions and access to
+    classified data land here; ordinary successful calls do not &mdash; those are
+    in Traffic. Each record carries the hash of the one before it, so a deleted
+    or edited row stops the chain verifying. Copy the head somewhere this system
+    cannot write &mdash; that is what catches a rewrite of the whole chain.
+  </p>
+  <div class="cards" id="audit-cards"></div>
+  <div class="wrap">
+    <table>
+      <thead><tr>
+        <th>#</th><th>when</th><th>action</th><th>outcome</th>
+        <th>tenant</th><th>actor</th><th>resource</th><th>hash</th>
+      </tr></thead>
+      <tbody id="audit-rows"></tbody>
+    </table>
+    <div class="empty" id="audit-empty" hidden></div>
+  </div>
+</main>
+
 <dialog id="detail"><header><b id="d-title"></b></header><div class="body" id="d-body"></div></dialog>
 
 <script>
@@ -216,15 +244,17 @@ const when = (iso) => new Date(iso).toLocaleTimeString();
 let tab = "traffic";
 function showTab(name) {
   tab = name;
-  for (const other of ["traffic", "chat"]) {
+  for (const other of ["traffic", "chat", "audit"]) {
     $(other).hidden = other !== name;
     $("tab-" + other).classList.toggle("on", other === name);
   }
   if (name === "traffic") load();
-  else loadModels();
+  else if (name === "chat") loadModels();
+  else loadAudit();
 }
 $("tab-traffic").onclick = () => showTab("traffic");
 $("tab-chat").onclick = () => showTab("chat");
+$("tab-audit").onclick = () => showTab("audit");
 
 // --- traffic ------------------------------------------------------------
 
@@ -450,12 +480,12 @@ function drawTranscript() {
     </div>`).join("");
 
   for (const button of $("transcript").querySelectorAll("[data-trace]")) {
-    button.onclick = () => trace(turns[Number(button.dataset.trace)].requestId);
+    button.onclick = () => trace_(turns[Number(button.dataset.trace)].requestId);
   }
 }
 
 // Open the gateway's own record of a turn: the stages, not the reply.
-async function trace(requestId) {
+async function trace_(requestId) {
   try {
     show(await api("/v1/requests/" + encodeURIComponent(requestId)));
   } catch (err) {
@@ -475,6 +505,126 @@ $("prompt").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) send();
 });
 
+// --- audit --------------------------------------------------------------
+
+let refusalsOnly = false;
+
+async function loadAudit() {
+  if (tab !== "audit") return;
+  if (!value($("token"))) {
+    $("audit-rows").innerHTML = "";
+    $("audit-cards").innerHTML = "";
+    $("chain").textContent = "";
+    $("audit-empty").hidden = false;
+    $("audit-empty").textContent = "Paste your admin token above to load the audit trail.";
+    return;
+  }
+  $("status").textContent = "loading\u2026";
+  try {
+    const params = new URLSearchParams({ limit: "100" });
+    if (refusalsOnly) params.set("refused", "true");
+
+    const [list, summary, verdict] = await Promise.all([
+      api("/v1/audit?" + params), api("/v1/audit/summary"), api("/v1/audit/verify"),
+    ]);
+    renderAudit(list.records, summary.actions, verdict);
+    $("status").textContent = "updated " + new Date().toLocaleTimeString();
+  } catch (err) {
+    $("status").textContent = err.message;
+    $("audit-rows").innerHTML = "";
+    $("audit-empty").hidden = false;
+    $("audit-empty").textContent = err.message;
+  }
+}
+
+function renderAudit(records, actions, verdict) {
+  // The chain verdict is the first thing on the page, because a table of audit
+  // records nobody has checked is a table of claims.
+  $("chain").innerHTML = verdict.intact
+    ? `<span class="ok">chain intact</span> \u00b7 ${verdict.checked} records \u00b7
+       head <code>${escape(verdict.head.slice(0, 16))}\u2026</code>`
+    : `<span class="fail">chain broken at #${escape(verdict.broken_at)}</span> \u00b7
+       ${escape(verdict.reason)}`;
+
+  const cards = [["decisions recorded", verdict.checked], ["shown", records.length]];
+  for (const [action, n] of Object.entries(actions).slice(0, 4)) cards.push([action, n]);
+  $("audit-cards").innerHTML = cards
+    .map(([k, v]) => `<div class="card"><b>${escape(v)}</b><span>${escape(k)}</span></div>`)
+    .join("");
+
+  $("audit-empty").hidden = records.length > 0;
+  // Empty is the ordinary state of a healthy gateway, and the tab has to say so
+  // in a way that does not read as a page that failed to load. It also has to
+  // say how to make a record appear, because "send a message and watch" is what
+  // everybody tries first and it is exactly the thing that produces nothing.
+  $("audit-empty").innerHTML = refusalsOnly
+    ? `No refusals recorded. Nothing has been turned away.`
+    : `<p style="margin:0 0 6px"><b>Nothing to audit yet &mdash; which is the healthy state.</b></p>
+       <p style="margin:0;font-size:13px">A successful call to a public model is
+       <i>not</i> recorded here; it is in <b>Traffic</b>, with its stage timings.
+       This tab fills up when something is <b>refused</b>, when <b>PII is
+       redacted</b>, or when <b>classified data</b> is accessed.</p>
+       <p style="margin:8px 0 0;font-size:13px">To see one: send from the Chat
+       tab with a wrong key, or ask for a model that does not exist.</p>`;
+  $("audit-rows").innerHTML = records.map((r, i) => `
+    <tr data-i="${i}">
+      <td class="muted">${r.seq}</td>
+      <td class="muted">${escape(when(r.occurred_at))}</td>
+      <td><code>${escape(r.action)}</code></td>
+      <td class="${r.outcome ? "fail" : "ok"}">${escape(r.outcome || "allowed")}</td>
+      <td>${escape(r.tenant || "\u2014")}</td>
+      <td class="muted">${escape(r.actor || "\u2014")}</td>
+      <td><code>${escape(r.resource || "\u2014")}</code></td>
+      <td><code class="muted">${escape(r.hash.slice(0, 10))}</code></td>
+    </tr>`).join("");
+
+  for (const row of $("audit-rows").children) {
+    row.onclick = () => showAudit(records[Number(row.dataset.i)]);
+  }
+}
+
+function showAudit(r) {
+  $("d-title").textContent = "#" + r.seq + " \u00b7 " + r.action;
+  const facts = [
+    ["when", new Date(r.occurred_at).toLocaleString()],
+    ["action", r.action],
+    ["outcome", r.outcome || "allowed"],
+    ["reason", r.reason || "\u2014"],
+    ["tenant", r.tenant || "\u2014"],
+    ["actor", r.actor || "\u2014"],
+    ["resource", r.resource || "\u2014"],
+    ["source", r.source_ip || "\u2014"],
+    ["snapshot", r.snapshot_version],
+    ["event id", r.event_id],
+    ["request", r.request_id || "\u2014"],
+    ["follows", r.prev_hash],
+    ["hash", r.hash],
+  ];
+  const trace = r.request_id
+    ? `<button id="d-trace">open the request</button>` : "";
+  $("d-body").innerHTML =
+    `<dl class="kv">${facts.map(([k, v]) =>
+      `<dt>${escape(k)}</dt><dd><code>${escape(v)}</code></dd>`).join("")}</dl>
+     <p style="margin-top:18px">${trace}
+     <button onclick="detail.close()">Close</button></p>`;
+  if (r.request_id) {
+    // The audit record says a decision was made; the request record says what
+    // it cost and where the time went. Neither answers the other's question.
+    $("d-trace").onclick = () => { $("detail").close(); trace_(r.request_id); };
+  }
+  $("detail").showModal();
+}
+
+$("audit-all").onclick = () => {
+  refusalsOnly = false;
+  $("audit-all").classList.add("on"); $("audit-refused").classList.remove("on"); loadAudit();
+};
+$("audit-refused").onclick = () => {
+  refusalsOnly = true;
+  $("audit-refused").classList.add("on"); $("audit-all").classList.remove("on"); loadAudit();
+};
+$("audit-refresh").onclick = loadAudit;
+
 // --- wiring -------------------------------------------------------------
 
 $("all").onclick = () => { failedOnly = false; $("all").classList.add("on"); $("failed").classList.remove("on"); load(); };
@@ -488,11 +638,11 @@ $("shadow").onchange = load;
 let typing;
 $("token").addEventListener("input", () => {
   clearTimeout(typing);
-  typing = setTimeout(() => { load(); loadModels(); }, 400);
+  typing = setTimeout(() => { load(); loadModels(); loadAudit(); }, 400);
 });
 
 load();
-setInterval(() => { if ($("auto").checked) load(); }, 10000);
+setInterval(() => { if ($("auto").checked) { load(); loadAudit(); } }, 10000);
 </script>
 </body>
 </html>

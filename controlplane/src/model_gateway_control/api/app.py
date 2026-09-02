@@ -52,6 +52,7 @@ from model_gateway_control.errors import (
     InvalidRequestError,
     NotFoundError,
 )
+from model_gateway_control.service.audit import AuditLog
 from model_gateway_control.service.finetune import Evaluators, FineTuneService, Trainers
 from model_gateway_control.service.keys import KeyService
 from model_gateway_control.service.policy import PolicyService
@@ -529,6 +530,53 @@ def create_app(settings: AdminSettings) -> FastAPI:
     async def get_request(request_id: str, session: Session) -> Response:
         record = await RequestLog(session).get(request_id)
         return _json_response(status.HTTP_200_OK, _request_json(record))
+
+    # --- audit ------------------------------------------------------------
+    #
+    # A narrower trail than the request log and a stricter one: decisions
+    # rather than measurements, appended in a hash chain so a deleted or edited
+    # record is detectable. Read-only over HTTP with no write route at all —
+    # the only writer is the consumer that appends from the stream.
+
+    @app.get("/v1/audit", dependencies=[Authorized])
+    async def list_audit(
+        session: Session,
+        limit: int = 100,
+        tenant: str | None = None,
+        action: str | None = None,
+        refused: bool = False,
+    ) -> Response:
+        records = await AuditLog(session).recent(
+            limit=limit, tenant=tenant, action=action, refusals_only=refused
+        )
+        return _json_response(status.HTTP_200_OK, {"records": [_audit_json(r) for r in records]})
+
+    @app.get("/v1/audit/summary", dependencies=[Authorized])
+    async def audit_summary(session: Session) -> Response:
+        return _json_response(
+            status.HTTP_200_OK, {"actions": await AuditLog(session).action_summary()}
+        )
+
+    @app.get("/v1/audit/verify", dependencies=[Authorized])
+    async def verify_audit(session: Session) -> Response:
+        """Recompute the chain and report the first record that does not match.
+
+        The head it returns is the value worth copying somewhere this process
+        cannot write. Verification here proves the chain is internally
+        consistent; only an external copy of the head proves it was not
+        rewritten wholesale by someone who could recompute all of it.
+        """
+        verdict = await AuditLog(session).verify()
+        return _json_response(
+            status.HTTP_200_OK,
+            {
+                "intact": verdict.intact,
+                "checked": verdict.checked,
+                "broken_at": verdict.broken_at,
+                "reason": verdict.reason,
+                "head": verdict.head,
+            },
+        )
 
     @app.get("/dashboard", response_class=HTMLResponse, dependencies=[])
     async def dashboard() -> HTMLResponse:
@@ -1009,3 +1057,22 @@ def _json_response(code: int, body: Any) -> Response:
 
 def _json_str(value: str) -> str:
     return json.dumps(value)
+
+
+def _audit_json(row: Any) -> dict[str, Any]:
+    return {
+        "seq": row.seq,
+        "event_id": row.event_id,
+        "request_id": row.request_id,
+        "occurred_at": row.occurred_at.isoformat(),
+        "tenant": row.tenant_id,
+        "actor": row.actor,
+        "action": row.action,
+        "resource": row.resource,
+        "outcome": row.outcome,
+        "reason": row.reason,
+        "source_ip": row.source_ip,
+        "snapshot_version": row.snapshot_version,
+        "prev_hash": row.prev_hash,
+        "hash": row.hash,
+    }

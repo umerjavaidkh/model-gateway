@@ -1,15 +1,20 @@
-"""Read usage events from the Redis stream.
+"""Read events from a Redis stream.
 
 A consumer group is used rather than a plain read, so several replicas share
 the work and an unacknowledged message is redelivered rather than lost. That
 redelivery is precisely why the accountant is idempotent: at-least-once is the
 guarantee the stream offers, and the consumer has to be built for it rather
 than hope for exactly-once.
+
+Two streams use this: usage and audit. The reader is identical because the
+difference between them is not in how they are read — it is the message they
+carry, their retention, and, for audit, that only one consumer may write.
 """
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -26,32 +31,45 @@ DEFAULT_STREAM = "gateway:usage"
 PAYLOAD_FIELD = b"event"
 DEFAULT_GROUP = "accounting"
 
+#: Must match the data plane's redisstream.DefaultAuditStream.
+DEFAULT_AUDIT_STREAM = "gateway:audit"
+DEFAULT_AUDIT_GROUP = "audit"
+
 logger = logging.getLogger(__name__)
 
 
+#: The protobuf messages this module can read. The reader is parameterised by
+#: a type rather than duplicated per stream: the difference between the two
+#: streams is what they carry, not how they are read, and two copies of a
+#: consumer-group reader is two places to get redelivery wrong.
+type Readable = pb.UsageEvent | pb.AuditEvent
+
+
 @dataclass(frozen=True, slots=True)
-class Batch:
+class Batch[Message: Readable]:
     """Events read together, with the ids needed to acknowledge them."""
 
     ids: list[bytes]
-    events: list[pb.UsageEvent]
+    events: list[Message]
 
     def __len__(self) -> int:
         return len(self.events)
 
 
-class UsageStream:
-    """A consumer-group reader over the usage stream."""
+class EventStream[Message: Readable]:
+    """A consumer-group reader over one stream."""
 
     def __init__(
         self,
         client: Redis,
+        message: Callable[[], Message],
         *,
-        stream: str = DEFAULT_STREAM,
-        group: str = DEFAULT_GROUP,
-        consumer: str = "accounting-1",
+        stream: str,
+        group: str,
+        consumer: str,
     ) -> None:
         self._client = client
+        self._message: Callable[[], Message] = message
         self._stream = stream
         self._group = group
         self._consumer = consumer
@@ -69,7 +87,7 @@ class UsageStream:
             if "BUSYGROUP" not in str(err):
                 raise
 
-    async def read(self, *, count: int = 100, block_ms: int = 5000) -> Batch:
+    async def read(self, *, count: int = 100, block_ms: int = 5000) -> Batch[Message]:
         """Read the next batch of undelivered events.
 
         Blocks rather than polling, so an idle consumer costs one connection
@@ -95,7 +113,7 @@ class UsageStream:
             return Batch(ids=[], events=[])
         return self._decode(response)
 
-    async def read_pending(self, *, count: int = 100) -> Batch:
+    async def read_pending(self, *, count: int = 100) -> Batch[Message]:
         """Re-read messages delivered to this consumer but never acknowledged.
 
         A consumer that died mid-batch leaves them owned but unacknowledged;
@@ -115,7 +133,7 @@ class UsageStream:
         if ids:
             await self._client.xack(self._stream, self._group, *ids)
 
-    def _decode(self, response: Any) -> Batch:
+    def _decode(self, response: Any) -> Batch[Message]:
         """Turn a raw xreadgroup response into a batch.
 
         The response shape depends on the RESP protocol version: RESP2 gives a
@@ -125,7 +143,7 @@ class UsageStream:
         ever changes the pin.
         """
         ids: list[bytes] = []
-        events: list[pb.UsageEvent] = []
+        events: list[Message] = []
 
         for entries in _entries_by_stream(response):
             for entry_id, fields in entries:
@@ -136,7 +154,7 @@ class UsageStream:
                     ids.append(entry_id)
                     continue
 
-                event = pb.UsageEvent()
+                event = self._message()
                 try:
                     event.ParseFromString(payload)
                 except Exception:
@@ -144,7 +162,8 @@ class UsageStream:
                     # stopping the consumer: one bad message must not halt
                     # accounting for everything behind it.
                     logger.exception(
-                        "discarding an unparseable usage event", extra={"id": entry_id}
+                        "discarding an unparseable event",
+                        extra={"id": entry_id, "stream": self._stream},
                     )
                     ids.append(entry_id)
                     continue
@@ -162,3 +181,36 @@ def _entries_by_stream(response: Any) -> list[Any]:
     if isinstance(response, dict):
         return list(response.values())
     return [entries for _stream, entries in response]
+
+
+class UsageStream(EventStream[pb.UsageEvent]):
+    """The measurements: one record per request, consumed by accounting."""
+
+    def __init__(
+        self,
+        client: Redis,
+        *,
+        stream: str = DEFAULT_STREAM,
+        group: str = DEFAULT_GROUP,
+        consumer: str = "accounting-1",
+    ) -> None:
+        super().__init__(client, pb.UsageEvent, stream=stream, group=group, consumer=consumer)
+
+
+class AuditStream(EventStream[pb.AuditEvent]):
+    """The decisions: appended to a hash chain by a single consumer.
+
+    A subclass rather than an argument so that pointing a consumer at the wrong
+    stream is a type error rather than a configuration mistake nobody notices
+    until an audit.
+    """
+
+    def __init__(
+        self,
+        client: Redis,
+        *,
+        stream: str = DEFAULT_AUDIT_STREAM,
+        group: str = DEFAULT_AUDIT_GROUP,
+        consumer: str = "audit-1",
+    ) -> None:
+        super().__init__(client, pb.AuditEvent, stream=stream, group=group, consumer=consumer)

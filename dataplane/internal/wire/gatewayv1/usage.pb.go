@@ -393,6 +393,160 @@ func (x *StageTiming) GetOutcome() string {
 	return ""
 }
 
+// AuditEvent records a decision, where a UsageEvent records a measurement.
+//
+// That is the line between the two, and it is why they are separate messages on
+// separate streams rather than one message with optional fields: a refusal, a
+// redaction and a configuration change are things somebody decided, and they
+// are kept append-only with a hash chain and their own retention clock. Token
+// counts are things that happened, and they are aggregated and expired.
+//
+// The chain itself is not on this message. Two workers publishing concurrently
+// would each need the previous record's hash to compute their own, and there is
+// no previous record until one of them is written — so the chain is computed by
+// the single consumer that appends, not by the producers.
+type AuditEvent struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// event_id makes the record idempotent under at-least-once delivery. The
+	// request id cannot: one request can produce a refusal and a redaction, and
+	// a configuration change has no request at all.
+	EventId string `protobuf:"bytes,1,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
+	// request_id is empty for actions that were not a request — a key rotation,
+	// a policy publication.
+	RequestId       string `protobuf:"bytes,2,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	TimestampUnixMs int64  `protobuf:"varint,3,opt,name=timestamp_unix_ms,json=timestampUnixMs,proto3" json:"timestamp_unix_ms,omitempty"`
+	Tenant          string `protobuf:"bytes,4,opt,name=tenant,proto3" json:"tenant,omitempty"`
+	// actor is who did it: a key id, a user subject, or a service-account name.
+	Actor string `protobuf:"bytes,5,opt,name=actor,proto3" json:"actor,omitempty"`
+	// action is what they did: "chat.completions", "key.issue", "policy.publish".
+	Action string `protobuf:"bytes,6,opt,name=action,proto3" json:"action,omitempty"`
+	// resource is what they did it to: a model, a deployment, a component.
+	Resource string `protobuf:"bytes,7,opt,name=resource,proto3" json:"resource,omitempty"`
+	// outcome is empty when the action was allowed, and otherwise the code it
+	// was refused with.
+	Outcome string `protobuf:"bytes,8,opt,name=outcome,proto3" json:"outcome,omitempty"`
+	// reason is the human-readable half of the outcome: which guardrail refused,
+	// which rule matched. Never the payload that triggered it — the audit tap
+	// sits after redaction precisely so this table does not become a copy of the
+	// data it exists to protect.
+	Reason string `protobuf:"bytes,9,opt,name=reason,proto3" json:"reason,omitempty"`
+	// source_ip is the caller's address, for the "who and from where" an
+	// investigation starts from.
+	SourceIp string `protobuf:"bytes,10,opt,name=source_ip,json=sourceIp,proto3" json:"source_ip,omitempty"`
+	// snapshot_version is the configuration in force when the decision was made,
+	// which is what makes "why was this allowed in March" answerable.
+	SnapshotVersion uint64 `protobuf:"varint,11,opt,name=snapshot_version,json=snapshotVersion,proto3" json:"snapshot_version,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *AuditEvent) Reset() {
+	*x = AuditEvent{}
+	mi := &file_gateway_v1_usage_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AuditEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AuditEvent) ProtoMessage() {}
+
+func (x *AuditEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_v1_usage_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AuditEvent.ProtoReflect.Descriptor instead.
+func (*AuditEvent) Descriptor() ([]byte, []int) {
+	return file_gateway_v1_usage_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *AuditEvent) GetEventId() string {
+	if x != nil {
+		return x.EventId
+	}
+	return ""
+}
+
+func (x *AuditEvent) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *AuditEvent) GetTimestampUnixMs() int64 {
+	if x != nil {
+		return x.TimestampUnixMs
+	}
+	return 0
+}
+
+func (x *AuditEvent) GetTenant() string {
+	if x != nil {
+		return x.Tenant
+	}
+	return ""
+}
+
+func (x *AuditEvent) GetActor() string {
+	if x != nil {
+		return x.Actor
+	}
+	return ""
+}
+
+func (x *AuditEvent) GetAction() string {
+	if x != nil {
+		return x.Action
+	}
+	return ""
+}
+
+func (x *AuditEvent) GetResource() string {
+	if x != nil {
+		return x.Resource
+	}
+	return ""
+}
+
+func (x *AuditEvent) GetOutcome() string {
+	if x != nil {
+		return x.Outcome
+	}
+	return ""
+}
+
+func (x *AuditEvent) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *AuditEvent) GetSourceIp() string {
+	if x != nil {
+		return x.SourceIp
+	}
+	return ""
+}
+
+func (x *AuditEvent) GetSnapshotVersion() uint64 {
+	if x != nil {
+		return x.SnapshotVersion
+	}
+	return 0
+}
+
 var File_gateway_v1_usage_proto protoreflect.FileDescriptor
 
 const file_gateway_v1_usage_proto_rawDesc = "" +
@@ -440,7 +594,22 @@ const file_gateway_v1_usage_proto_rawDesc = "" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1f\n" +
 	"\vduration_ms\x18\x02 \x01(\rR\n" +
 	"durationMs\x12\x18\n" +
-	"\aoutcome\x18\x03 \x01(\tR\aoutcomeBIZGgithub.com/umerjavaidkh/model-gateway/dataplane/internal/wire/gatewayv1b\x06proto3"
+	"\aoutcome\x18\x03 \x01(\tR\aoutcome\"\xce\x02\n" +
+	"\n" +
+	"AuditEvent\x12\x19\n" +
+	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x02 \x01(\tR\trequestId\x12*\n" +
+	"\x11timestamp_unix_ms\x18\x03 \x01(\x03R\x0ftimestampUnixMs\x12\x16\n" +
+	"\x06tenant\x18\x04 \x01(\tR\x06tenant\x12\x14\n" +
+	"\x05actor\x18\x05 \x01(\tR\x05actor\x12\x16\n" +
+	"\x06action\x18\x06 \x01(\tR\x06action\x12\x1a\n" +
+	"\bresource\x18\a \x01(\tR\bresource\x12\x18\n" +
+	"\aoutcome\x18\b \x01(\tR\aoutcome\x12\x16\n" +
+	"\x06reason\x18\t \x01(\tR\x06reason\x12\x1b\n" +
+	"\tsource_ip\x18\n" +
+	" \x01(\tR\bsourceIp\x12)\n" +
+	"\x10snapshot_version\x18\v \x01(\x04R\x0fsnapshotVersionBIZGgithub.com/umerjavaidkh/model-gateway/dataplane/internal/wire/gatewayv1b\x06proto3"
 
 var (
 	file_gateway_v1_usage_proto_rawDescOnce sync.Once
@@ -454,11 +623,12 @@ func file_gateway_v1_usage_proto_rawDescGZIP() []byte {
 	return file_gateway_v1_usage_proto_rawDescData
 }
 
-var file_gateway_v1_usage_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_gateway_v1_usage_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_gateway_v1_usage_proto_goTypes = []any{
 	(*TokenUsage)(nil),  // 0: gateway.v1.TokenUsage
 	(*UsageEvent)(nil),  // 1: gateway.v1.UsageEvent
 	(*StageTiming)(nil), // 2: gateway.v1.StageTiming
+	(*AuditEvent)(nil),  // 3: gateway.v1.AuditEvent
 }
 var file_gateway_v1_usage_proto_depIdxs = []int32{
 	0, // 0: gateway.v1.UsageEvent.usage:type_name -> gateway.v1.TokenUsage
@@ -481,7 +651,7 @@ func file_gateway_v1_usage_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_gateway_v1_usage_proto_rawDesc), len(file_gateway_v1_usage_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   3,
+			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

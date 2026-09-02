@@ -186,3 +186,6 @@ decided and why.
 | M11b — Eval gate: EvalPort, scorecards, promotion gate | **done** |
 | M11c — Weighted rollout: canary steps, multi-LoRA routing | **done** |
 | M11d — Shadow traffic: mirrored scoring, automatic promotion | **done** |
+| M12 — Provisioning API: tenants, deployments, aliases, budgets | **done** |
+| M12b — Operator console: traffic, chat, request-level detail | **done** |
+| M13 — Audit records: hash chain, append-only table, verification | **done** |

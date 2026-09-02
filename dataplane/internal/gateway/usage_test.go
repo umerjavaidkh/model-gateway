@@ -21,6 +21,7 @@ import (
 type collector struct {
 	mu     sync.Mutex
 	events []core.UsageEvent
+	audits []core.AuditEvent
 }
 
 func (*collector) Name() string { return "collector" }
@@ -29,8 +30,11 @@ func (c *collector) Emit(_ context.Context, events ...core.Event) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, e := range events {
-		if u, ok := e.(core.UsageEvent); ok {
-			c.events = append(c.events, u)
+		switch event := e.(type) {
+		case core.UsageEvent:
+			c.events = append(c.events, event)
+		case core.AuditEvent:
+			c.audits = append(c.audits, event)
 		}
 	}
 	return nil
@@ -50,6 +54,12 @@ func (c *collector) all() []core.UsageEvent {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return append([]core.UsageEvent(nil), c.events...)
+}
+
+func (c *collector) auditEvents() []core.AuditEvent {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]core.AuditEvent(nil), c.audits...)
 }
 
 func pipelineWithCollector(t *testing.T) (*gateway.Pipeline, *collector) {
