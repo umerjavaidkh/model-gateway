@@ -19,12 +19,14 @@ from model_gateway_control.domain.identity import compute_key_lookup
 
 TENANT = "demo"
 PREFIX = "demo"
-#: Printed, never stored. What the control plane keeps is the HMAC lookup,
-#: which is useless without the pepper.
+#: A fixed development constant, not a generated credential. What the control
+#: plane stores is the HMAC lookup, which is useless without the pepper.
+#:
+#: Deliberately not printed. It is already in this file and in the README, so
+#: echoing it buys nothing — and a seed that prints secrets is the pattern
+#: someone copies into a script that seeds something real, where the value is
+#: not a constant and the log is not disposable.
 SECRET = "local-development-key"
-#: How a key is presented: gw_<prefix>_<secret>. The prefix is what routes the
-#: lookup to a tenant before anything is verified.
-PRESENTED = f"gw_{PREFIX}_{SECRET}"
 
 
 async def main() -> int:
@@ -34,7 +36,7 @@ async def main() -> int:
     engine = create_engine(database_url)
     async with session_factory(engine)() as session:
         if await session.scalar(select(models.Tenant).where(models.Tenant.id == TENANT)):
-            print(f"already seeded; key is {PRESENTED}", file=sys.stderr)
+            print("already seeded; the key is in deploy/local/README.md", file=sys.stderr)
             await engine.dispose()
             return 0
 
@@ -97,7 +99,7 @@ async def main() -> int:
         await session.commit()
 
     await engine.dispose()
-    print(f"seeded; key is {PRESENTED}", file=sys.stderr)
+    print("seeded; the key is in deploy/local/README.md", file=sys.stderr)
     return 0
 
 
