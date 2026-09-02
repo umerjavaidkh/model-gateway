@@ -86,6 +86,11 @@ type Router struct {
 	maxAttempts int
 	backoff     time.Duration
 
+	// draw returns a number in [0,1) for the weighted choice of which
+	// deployment serves. Injected so a test can assert a split rather than
+	// sample one.
+	draw func() float64
+
 	mu       sync.Mutex
 	breakers map[core.DeploymentID]*Breaker
 	health   map[core.DeploymentID]*Health
@@ -161,11 +166,24 @@ func New(providers ProviderFor, opts ...Option) (*Router, error) {
 		backoff:     DefaultRetryBackoff,
 		breakers:    map[core.DeploymentID]*Breaker{},
 		health:      map[core.DeploymentID]*Health{},
+		draw:        rand.Float64,
 	}
 	for _, opt := range opts {
 		opt(r)
 	}
 	return r, nil
+}
+
+// WithDraw replaces the source of randomness used to split traffic by weight.
+//
+// For tests, which need to assert that a weight of 1 in 101 takes one request
+// in a hundred rather than sample until they are convinced.
+func WithDraw(draw func() float64) Option {
+	return func(r *Router) {
+		if draw != nil {
+			r.draw = draw
+		}
+	}
 }
 
 // SelectionInput is everything selection needs, and nothing more.
@@ -257,7 +275,80 @@ func (r *Router) Select(in SelectionInput) ([]Candidate, error) {
 			return 0
 		}
 	})
+
+	// Weight decides who serves; score decides who is best. They are different
+	// questions, and a canary is the case where they disagree: an adapter at
+	// weight 1 may well score highest — new, healthy, same price — and must
+	// still take one request in a hundred rather than all of them.
+	//
+	// So the head is drawn by weight and the tail stays in score order, which
+	// leaves failover picking the best remaining deployment.
+	promote(candidates, r.draw())
 	return candidates, nil
+}
+
+// promote moves the weight-drawn candidate to the front, keeping the rest in
+// score order.
+//
+// Only when the weights actually differ. A weight is a *relative* share, so
+// candidates that all carry the same one are an operator saying "treat these
+// equally" — and equally then falls to the score, which is the system's own
+// judgement about health, price and locality. Drawing lots between them
+// instead would throw that away and make every routing decision unreproducible
+// for no one's benefit.
+//
+// When the weights do differ, the operator has asked for a split and the split
+// wins. That is the canary: an adapter at weight 1 may well score highest —
+// new, healthy, same price — and must still take one request in a hundred
+// rather than all of them.
+//
+// The draw is weighted by weight × health, so a canary whose breaker is
+// half-open does not take its full share on the strength of a number an
+// operator set yesterday.
+func promote(candidates []Candidate, draw float64) {
+	if len(candidates) < 2 || !weightsDiffer(candidates) {
+		return
+	}
+
+	total := 0.0
+	for _, candidate := range candidates {
+		total += drawWeight(candidate)
+	}
+	if total <= 0 {
+		// Every candidate is unhealthy, or weights are all zero — which
+		// selection already excluded. Leave score order alone rather than
+		// inventing a winner.
+		return
+	}
+
+	target := draw * total
+	running := 0.0
+	for i, candidate := range candidates {
+		running += drawWeight(candidate)
+		if running > target {
+			// Rotate rather than swap: swapping would put the previous head
+			// wherever the winner was, scrambling the failover order below it.
+			winner := candidates[i]
+			copy(candidates[1:i+1], candidates[:i])
+			candidates[0] = winner
+			return
+		}
+	}
+}
+
+func drawWeight(c Candidate) float64 {
+	return float64(c.Deployment.Weight) * c.Health
+}
+
+// weightsDiffer reports whether an operator has asked for a particular split.
+func weightsDiffer(candidates []Candidate) bool {
+	first := candidates[0].Deployment.Weight
+	for _, candidate := range candidates[1:] {
+		if candidate.Deployment.Weight != first {
+			return true
+		}
+	}
+	return false
 }
 
 // applyObjective folds cost and locality into each candidate's score.

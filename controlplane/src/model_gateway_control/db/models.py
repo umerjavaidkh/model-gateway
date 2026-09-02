@@ -697,3 +697,14 @@ class FineTuneJob(Base, TimestampMixin):
     #: compared against another scorecard — there is nothing to query across.
     scorecard: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
     baseline: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
+
+    #: Where the adapter is in its canary walk. -1 means no rollout has been
+    #: started, which is distinct from step 0 at weight 0.
+    rollout_step: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("-1"))
+    rollout_weight: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    #: The steps to walk, as a JSON list of percentages. On the job rather than
+    #: in configuration, so the rollout a job gets is the one it was submitted
+    #: with.
+    canary_steps: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'[1, 5, 25, 100]'")
+    )

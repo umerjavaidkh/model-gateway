@@ -17,6 +17,8 @@ queries anything at request time.
 
 from __future__ import annotations
 
+import logging
+from dataclasses import replace
 from datetime import UTC, datetime
 
 from sqlalchemy import select
@@ -47,6 +49,8 @@ from model_gateway_control.domain.policy import PolicyBundle, PolicyEffect, Poli
 from model_gateway_control.domain.signing import Signature
 from model_gateway_control.domain.tenant import Fleet, PluginBinding, Tenant
 from model_gateway_control.errors import NotFoundError
+
+logger = logging.getLogger(__name__)
 
 
 class Repository:
@@ -82,12 +86,65 @@ class Repository:
         return Fleet(
             default_policy=await self._load_policy(None),
             version=state.version,
-            deployments=tuple(_to_deployment(d) for d in deployments),
+            deployments=(
+                tuple(_to_deployment(d) for d in deployments)
+                + await self._adapter_deployments([_to_deployment(d) for d in deployments])
+            ),
             aliases=tuple(_to_alias(a) for a in aliases),
             registry=await self.load_registry(),
             default_plugins=tuple(_to_plugin(p) for p in plugins),
             policy_bundle_ref=state.policy_bundle_ref,
         )
+
+    async def _adapter_deployments(self, base: list[Deployment]) -> tuple[Deployment, ...]:
+        """Deployments for the adapters that are rolling out.
+
+        Derived rather than stored. An adapter is not a new endpoint — it is the
+        base model's deployment serving a second routing key, which is what
+        multi-LoRA means: one vLLM pod holds many adapters and loads them by id.
+        Copying the base deployment and changing only the key and the weight
+        keeps that true by construction. A stored copy would drift the moment
+        someone repointed the base model at a new provider.
+
+        Only jobs that have started a rollout appear. One at weight zero is in
+        the routing table and not serving, which is where a rollout starts and
+        where an abort returns it — and being in the table is what makes
+        rollback a snapshot version rather than a redeployment.
+        """
+        rolling = (
+            await self._session.scalars(
+                select(models.FineTuneJob).where(models.FineTuneJob.rollout_step >= 0)
+            )
+        ).all()
+        if not rolling:
+            return ()
+
+        by_model = {d.key.base_model: d for d in base if not d.key.adapter_id}
+
+        adapters = []
+        for row in rolling:
+            host = by_model.get(row.base_model)
+            if host is None:
+                # The base model has no deployment, so there is nothing to load
+                # the adapter into. Skipping rather than failing the whole
+                # snapshot: one job pointing at a retired model must not stop
+                # every other tenant's configuration from compiling.
+                logger.warning(
+                    "adapter %s/%s names base model %r, which has no deployment",
+                    row.tenant_id,
+                    row.name,
+                    row.base_model,
+                )
+                continue
+            adapters.append(
+                replace(
+                    host,
+                    id=f"{host.id}+{row.tenant_id}-{row.name}",
+                    key=RoutingKey(base_model=row.base_model, adapter_id=row.name),
+                    weight=row.rollout_weight,
+                )
+            )
+        return tuple(adapters)
 
     async def load_registry(self) -> Registry:
         """Read the component registry the snapshot's bindings are checked against.
