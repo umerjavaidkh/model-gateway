@@ -29,6 +29,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     DateTime,
     ForeignKey,
@@ -626,3 +627,61 @@ class PolicyCondition(Base):
     #: model | endpoint | role | region | cidr
     kind: Mapped[str] = mapped_column(String(16), nullable=False)
     value: Mapped[str] = mapped_column(String(255), nullable=False)
+
+
+class FineTuneJob(Base, TimestampMixin):
+    """A fine-tuning job: the spec that was submitted and where it has got to.
+
+    Spec and status in one row rather than two tables. They are written
+    together, read together, and locked together by the reconciler; splitting
+    them would buy a join and a way for the two halves to disagree about which
+    generation of a job is being reconciled.
+    """
+
+    __tablename__ = "finetune_jobs"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "name", name="uq_finetune_jobs_name"),
+        # Unique across every job, not per tenant. Two jobs sharing a key would
+        # get the same run back from an idempotent trainer, so the second would
+        # silently adopt the first one's training run and its artifact.
+        UniqueConstraint("idempotency_key", name="uq_finetune_jobs_idempotency_key"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("tenants.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    # --- spec: what was asked for, immutable once submitted ---
+    base_model: Mapped[str] = mapped_column(String(128), nullable=False)
+    trainer: Mapped[str] = mapped_column(String(64), nullable=False)
+    trainer_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    dataset_uri: Mapped[str] = mapped_column(String(1024), nullable=False)
+    dataset_checksum: Mapped[str] = mapped_column(String(128), nullable=False)
+    dataset_rows: Mapped[int] = mapped_column(Integer, nullable=False)
+    dataset_schema_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    #: Opaque to the gateway, so stored as JSON text rather than columns: every
+    #: backend has its own, and a schema here would be a lowest common
+    #: denominator that blocks the interesting ones.
+    hyperparameters: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'{}'"))
+    budget_ref: Mapped[str] = mapped_column(String(64), nullable=False, server_default=text("''"))
+    eval_suite: Mapped[str] = mapped_column(String(64), nullable=False, server_default=text("''"))
+
+    #: Generated once at creation and sent with every submission attempt. This
+    #: is what lets a reconciler that crashed mid-submit ask the trainer what
+    #: happened instead of guessing — and guessing wrong books a second run.
+    idempotency_key: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    # --- status: where it has got to, maintained by the reconciler ---
+    phase: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    external_id: Mapped[str] = mapped_column(String(255), nullable=False, server_default=text("''"))
+    artifact_ref: Mapped[str] = mapped_column(
+        String(512), nullable=False, server_default=text("''")
+    )
+    reason: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
+    #: Integer micro-USD, like every other amount in this system. Never a float.
+    cost_micro_usd: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("0")
+    )
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
