@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/core"
@@ -87,6 +88,15 @@ type Config struct {
 	// compiling anything.
 	WASMDir string
 
+	// CORSOrigins are browser origins allowed to call this worker directly.
+	// Empty — the default — sends no CORS headers, so a browser will not make
+	// the request at all.
+	//
+	// A gateway holding provider credentials and every tenant's traffic should
+	// not be reachable from any page a user happens to open, so a deployment
+	// that genuinely serves browsers names its origins. There is no wildcard.
+	CORSOrigins []string
+
 	ReadTimeout   time.Duration
 	WriteTimeout  time.Duration
 	IdleTimeout   time.Duration
@@ -111,6 +121,7 @@ func Load(getenv Getenv) (Config, error) {
 		Region:            getenv("GATEWAY_REGION"),
 		NERSocket:         getenv("GATEWAY_NER_SOCKET"),
 		WASMDir:           getenv("GATEWAY_WASM_DIR"),
+		CORSOrigins:       splitList(getenv("GATEWAY_CORS_ORIGINS")),
 		OTLPInsecure:      getenv("GATEWAY_OTLP_INSECURE") == "true",
 		TraceSampleRatio:  DefaultTraceSampleRatio,
 		ReadTimeout:       DefaultReadTimeout,
@@ -158,6 +169,22 @@ func Load(getenv Getenv) (Config, error) {
 			"GATEWAY_KEY_PEPPER must be at least %d bytes, got %d", minPepperBytes, len(cfg.KeyPepper))
 	}
 	return cfg, nil
+}
+
+// splitList parses a comma-separated setting, dropping blanks so a trailing
+// comma is not read as an empty origin — which would match nothing while
+// looking like it should match something.
+func splitList(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	out := make([]string, 0, 2)
+	for _, part := range strings.Split(raw, ",") {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }
 
 func firstNonEmpty(values ...string) string {

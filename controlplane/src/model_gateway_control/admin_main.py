@@ -12,6 +12,7 @@ import os
 import uvicorn
 
 from model_gateway_control.api.app import AdminSettings, create_app
+from model_gateway_control.api.dashboard import DEFAULT_GATEWAY_URL
 from model_gateway_control.db.session import create_engine
 from model_gateway_control.domain.signing import Policy, TrustStore
 from model_gateway_control.errors import InvalidRequestError
@@ -62,6 +63,7 @@ def main() -> int:
             key_pepper=pepper,
             admin_token=token,
             trust=trust,
+            gateway_url=os.environ.get("GATEWAY_PUBLIC_URL", DEFAULT_GATEWAY_URL),
         )
     )
     uvicorn.run(

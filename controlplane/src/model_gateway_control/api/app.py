@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from model_gateway_control.api import idempotency
-from model_gateway_control.api.dashboard import DASHBOARD_HTML
+from model_gateway_control.api.dashboard import DEFAULT_GATEWAY_URL, render_dashboard
 from model_gateway_control.db.repository import Repository
 from model_gateway_control.db.session import session_factory
 from model_gateway_control.domain.budget import BudgetScope
@@ -98,6 +98,10 @@ class AdminSettings:
     #: have is refused at submission, because a job whose gate can never run
     #: would train at full cost and then stall.
     evaluators: Evaluators = field(default_factory=Evaluators)
+    #: Where the console's chat tab posts by default. The data plane is a
+    #: different process on a different host in every deployment that is
+    #: not a laptop, so it cannot be a constant in the page.
+    gateway_url: str = DEFAULT_GATEWAY_URL
     now: Callable[[], datetime] | None = None
 
 
@@ -528,7 +532,7 @@ def create_app(settings: AdminSettings) -> FastAPI:
 
     @app.get("/dashboard", response_class=HTMLResponse, dependencies=[])
     async def dashboard() -> HTMLResponse:
-        """A page for watching traffic.
+        """A page for watching traffic and for generating some.
 
         Served from the admin API rather than as its own deployable: it is a
         read-only view over data this process already has, and a second
@@ -540,7 +544,7 @@ def create_app(settings: AdminSettings) -> FastAPI:
         any other call. Shipping the token inside the page would put it in
         every browser cache that ever loaded it.
         """
-        return HTMLResponse(DASHBOARD_HTML)
+        return HTMLResponse(render_dashboard(settings.gateway_url))
 
     # --- policy -----------------------------------------------------------
     #
