@@ -3,9 +3,11 @@ package admission_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -270,3 +272,49 @@ func TestTheManifestIsFetchedFromTheControlPlane(t *testing.T) {
 		t.Fatalf("manifest = %+v", got)
 	}
 }
+
+func TestAComponentThatBindsButDoesNotAnswerIsNotAFailingVerdict(t *testing.T) {
+	// The socket existing only means the file was created. If nothing accepts
+	// a connection, every case fails with the same dial error and the report
+	// reads as though the component were broken — when the mount, the runtime
+	// or the host is just as likely. Docker Desktop on macOS does exactly this
+	// with a bind-mounted socket, which is how it was found.
+	deaf := deafSandbox{}
+
+	_, err := runner(t, deaf).Run(t.Context(), manifest(), fixtures())
+
+	if err == nil {
+		t.Fatal("an unreachable component produced a verdict")
+	}
+	if !strings.Contains(err.Error(), "does not answer") {
+		t.Fatalf("err = %v, want it to name the reachability failure", err)
+	}
+}
+
+// deafSandbox creates the socket file and never listens on it.
+type deafSandbox struct{}
+
+func (deafSandbox) Start(_ context.Context, spec sandbox.Spec) (*sandbox.Handle, error) {
+	path := filepath.Join(spec.SocketDir, spec.SocketName)
+	address, err := net.ResolveUnixAddr("unix", path)
+	if err != nil {
+		return nil, err
+	}
+	listener, err := net.ListenUnix("unix", address)
+	if err != nil {
+		return nil, err
+	}
+	// Go unlinks the socket on Close by default. Keeping the file is the whole
+	// point: a socket that exists with nothing behind it is exactly the state
+	// an unsupported mount presents.
+	listener.SetUnlinkOnClose(false)
+	_ = listener.Close()
+
+	info, err := os.Stat(path)
+	if err != nil || info.Mode()&os.ModeSocket == 0 {
+		return nil, errNotDeaf
+	}
+	return sandbox.NewHandle(path, func() { _ = os.Remove(path) }), nil
+}
+
+var errNotDeaf = errors.New("the fake sandbox failed to leave a dead socket behind")

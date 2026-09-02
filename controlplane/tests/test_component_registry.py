@@ -69,11 +69,24 @@ def test_a_control_plane_component_needs_no_latency_budget() -> None:
 def test_an_image_pinned_by_tag_is_rejected() -> None:
     # A floating tag turns the admitted artifact into a different one silently,
     # which defeats the gate entirely.
-    with pytest.raises(InvalidRequestError, match="image digest"):
-        manifest(execution=Execution.SIDECAR, image="ghcr.io/acme/presidio:latest")
+    for tagged in (
+        "ghcr.io/acme/presidio:latest",
+        "ghcr.io/acme/presidio",
+        "sha256:abc123",  # truncated, so not a content address
+        "@sha256:" + "a" * 64,  # no name before the digest
+        "ghcr.io/acme/presidio@sha256:" + "z" * 64,  # not hex
+    ):
+        with pytest.raises(InvalidRequestError, match="image digest"):
+            manifest(execution=Execution.SIDECAR, image=tagged)
 
-    pinned = manifest(image="ghcr.io/acme/presidio@sha256:" + "a" * 64)
-    assert pinned.image.endswith("a" * 64)
+
+def test_both_forms_of_digest_pin_are_accepted() -> None:
+    # A repository digest is what a published component carries. A bare image
+    # ID is what a locally built or air-gapped image has, and it is exactly as
+    # immutable — accepting only the first would mean an air-gapped deployment
+    # could admit nothing.
+    for pinned in ("ghcr.io/acme/presidio@sha256:" + "a" * 64, "sha256:" + "b" * 64):
+        assert manifest(image=pinned).image == pinned
 
 
 def test_a_config_schema_that_is_not_a_json_object_is_rejected() -> None:

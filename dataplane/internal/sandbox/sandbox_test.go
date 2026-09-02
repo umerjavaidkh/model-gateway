@@ -2,6 +2,7 @@ package sandbox_test
 
 import (
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,7 +15,8 @@ import (
 // installed is a test that does not run — which is how a dropped flag survives
 // a review and ships.
 
-const pinned = "ghcr.io/acme/guard@sha256:" + "ab12" + "0000000000000000000000000000000000000000000000000000000000"
+const pinned = "ghcr.io/acme/guard@sha256:" +
+	"ab12000000000000000000000000000000000000000000000000000000000000"
 
 func args(t *testing.T, spec sandbox.Spec) []string {
 	t.Helper()
@@ -60,7 +62,6 @@ func TestResourceCapsArePassed(t *testing.T) {
 		"--memory-swap": "512m", // equal to --memory, so it cannot swap instead
 		"--cpus":        "1.0",
 		"--pids-limit":  "64",
-		"--user":        "65534:65534",
 	} {
 		if value := valueAfter(got, flag); value != want {
 			t.Errorf("%s = %q, want %q", flag, value, want)
@@ -166,4 +167,34 @@ func valueAfter(args []string, flag string) string {
 		return ""
 	}
 	return args[index+1]
+}
+
+func TestABareImageIDIsAValidPin(t *testing.T) {
+	// A repository digest only exists once something has been pushed to a
+	// registry. A locally built or air-gapped image has an image ID instead,
+	// and it is exactly as immutable — accepting only the first would mean an
+	// air-gapped deployment could admit nothing.
+	spec := validSpec()
+	spec.Image = "sha256:" + strings.Repeat("a", 64)
+
+	if _, err := sandbox.New().Args(spec, "n"); err != nil {
+		t.Fatalf("Args: %v", err)
+	}
+}
+
+func TestReferencesThatAreNotPinsAreRefused(t *testing.T) {
+	for _, image := range []string{
+		"ghcr.io/acme/guard:latest",
+		"ghcr.io/acme/guard",
+		// Truncated, so not a content address.
+		"sha256:abc123",
+		"@sha256:" + strings.Repeat("a", 64),                   // no name before the digest
+		"ghcr.io/acme/guard@sha256:" + strings.Repeat("z", 64), // not hex
+	} {
+		spec := validSpec()
+		spec.Image = image
+		if _, err := sandbox.New().Args(spec, "n"); err == nil {
+			t.Errorf("accepted %q as a digest pin", image)
+		}
+	}
 }

@@ -82,7 +82,25 @@ which present the same command line. The package does not hardcode which.
 The isolation flags are asserted against the built argv rather than against
 observed container behaviour. A test that needs a container runtime installed
 is a test that does not run, and a dropped flag would then survive review and
-ship.
+ship. `scripts/admission-check.sh` runs the real thing where a runtime is
+available, which is what catches a flag that is *wrong* rather than missing.
+
+**The component runs as the runner's own uid.** A Unix socket needs write
+permission to connect, and one created under the default umask by a different
+user gives the runner none — verified rather than assumed: same uid connects,
+a different uid gets `EACCES`. The alternative is a component that makes its
+socket world-writable, which is a worse trade than an unprivileged uid the host
+already runs as. When the runner is root it falls back to nobody, because
+running the container as root just because the runner is root would hand a
+container escape the host's root.
+
+**Reachability is checked before the battery, and its failure is an error
+rather than a verdict.** The socket existing only means the component created
+the file. If nothing accepts a connection, every case fails with the same dial
+error and the report reads as though the component were broken — when the
+mount, the runtime or the host is just as likely. Docker Desktop on macOS does
+exactly this: its bind mount crosses a VM boundary that does not proxy Unix
+sockets, so the socket appears on the host and connecting is refused.
 
 ## Why not the alternatives
 

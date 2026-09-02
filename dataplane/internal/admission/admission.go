@@ -158,18 +158,33 @@ func (r *Runner) Run(ctx context.Context, manifest Manifest, fixtures Fixtures) 
 	}
 	defer func() { _ = handle.Close() }()
 
+	guardrail, err := guardrailsidecar.New(manifest.Name, handle.SocketPath,
+		guardrailsidecar.WithTimeout(callTimeout))
+	if err != nil {
+		return Verdict{}, err
+	}
+
+	// Reachability is checked before the battery, and its failure is an error
+	// rather than a verdict. The socket existing only means the component
+	// created the file; if nothing accepts a connection on it, every case
+	// fails with the same dial error and the report reads as though the
+	// component were broken. It might be — but so might the mount, the
+	// runtime, or the host, and a runner that cannot tell those apart is
+	// exactly the runner this package's exit codes claim not to be.
+	readyCtx, cancelReady := context.WithTimeout(ctx, readyTimeout)
+	defer cancelReady()
+	if err := guardrail.Ping(readyCtx); err != nil {
+		return Verdict{}, core.Wrapf(core.CodeUnavailable, err,
+			"the component bound %s but does not answer on it", handle.SocketPath)
+	}
+
 	recorder := contracts.NewRecorder(ctx, manifest.Name)
 	defer recorder.Finish()
 
 	// The suite calls the component with t.Context(), which is the ctx the
 	// recorder was built with — contextcheck cannot see through the interface
 	// to know the deadline is already threaded.
-	contracts.RunGuardrailSuite(recorder, func(t contracts.T) contracts.GuardrailTarget { //nolint:contextcheck
-		guardrail, err := guardrailsidecar.New(manifest.Name, handle.SocketPath,
-			guardrailsidecar.WithTimeout(callTimeout))
-		if err != nil {
-			t.Fatalf("connecting to the component: %v", err)
-		}
+	contracts.RunGuardrailSuite(recorder, func(contracts.T) contracts.GuardrailTarget { //nolint:contextcheck
 		return contracts.GuardrailTarget{
 			Guardrail: guardrail,
 			Trigger:   fixtures.Trigger,
@@ -194,3 +209,9 @@ func (r *Runner) Run(ctx context.Context, manifest Manifest, fixtures Fixtures) 
 // first request is not what a latency budget is about. The suite's own
 // deadline case is what checks the component respects a deadline at all.
 const callTimeout = 10 * time.Second
+
+// readyTimeout bounds the reachability check.
+//
+// Short, because the sandbox has already waited for the socket to appear. What
+// remains is one round trip to a process on the same host.
+const readyTimeout = 5 * time.Second

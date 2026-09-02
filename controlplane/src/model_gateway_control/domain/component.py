@@ -161,7 +161,7 @@ class Manifest:
             raise InvalidRequestError(
                 f"component {self.name!r} fills {self.port} and must declare a latency budget"
             )
-        if self.execution is Execution.SIDECAR and self.image and "@sha256:" not in self.image:
+        if self.execution is Execution.SIDECAR and self.image and not _pinned(self.image):
             raise InvalidRequestError(
                 f"component {self.name!r} pins {self.image!r} by tag; use an image digest"
             )
@@ -196,6 +196,33 @@ class Manifest:
             ensure_ascii=False,
         )
         return hashlib.sha256(payload.encode()).hexdigest()
+
+
+#: A bare content address: sha256 followed by 64 hex digits.
+_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+
+
+def _pinned(image: str) -> bool:
+    """Report whether a reference names immutable content.
+
+    Two forms qualify, and they are equally immutable. A repository digest —
+    ``ghcr.io/acme/guard@sha256:...`` — is what a published component carries.
+    A bare image ID — ``sha256:...`` — is what a locally built or air-gapped
+    image has, because a repository digest only exists once something has been
+    pushed to a registry; accepting only the first would mean an air-gapped
+    deployment could admit nothing.
+
+    A tag qualifies as neither: it names whatever was pushed most recently, so
+    admitting an artifact by tag admits a different one tomorrow.
+
+    The sandbox checks this again before running anything. Two checks of one
+    rule is deliberate — this one stops a bad manifest being stored, and that
+    one is the boundary that actually executes the bytes.
+    """
+    if _DIGEST.match(image):
+        return True
+    name, separator, digest = image.partition("@")
+    return bool(separator and name and _DIGEST.match(digest))
 
 
 def _validate_config_schema(name: str, schema: str) -> None:

@@ -33,6 +33,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -140,9 +141,18 @@ func (h *Handle) Close() error {
 	}
 }
 
+// NobodyUser is the fallback identity a component runs as.
+//
+// Used when the runner is root, where running the container as the runner's
+// own user would hand a container escape the host's root. A component running
+// as nobody must widen its own socket for the runner to reach it; see
+// componentUser.
+const NobodyUser = "65534:65534"
+
 // Container runs components under a container runtime.
 type Container struct {
 	runtime string
+	user    string
 	// name prefixes the container's name, so a leaked one is identifiable.
 	name func() string
 }
@@ -160,10 +170,40 @@ func WithRuntime(command string) Option {
 	}
 }
 
+// WithUser sets the uid:gid the component runs as.
+func WithUser(user string) Option {
+	return func(c *Container) {
+		if user != "" {
+			c.user = user
+		}
+	}
+}
+
+// componentUser picks the identity a component runs as.
+//
+// The runner's own uid, so the socket the component creates is owned by the
+// user that has to connect to it. A Unix socket needs write permission to
+// connect, and a socket created under the default umask by a different user
+// gives the runner none — the component would have to make its socket
+// world-writable instead, which is a worse trade than an unprivileged uid the
+// host already runs as.
+//
+// Root is the exception. Running the container as root because the runner
+// happens to be root would hand a container escape the host's root, so the
+// component runs as nobody and has to widen its own socket.
+func componentUser() string {
+	uid, gid := os.Getuid(), os.Getgid()
+	if uid == 0 {
+		return NobodyUser
+	}
+	return strconv.Itoa(uid) + ":" + strconv.Itoa(gid)
+}
+
 // New returns a Container runner.
 func New(opts ...Option) *Container {
 	c := &Container{
 		runtime: DefaultRuntime,
+		user:    componentUser(),
 		name: func() string {
 			return "gw-admission-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 		},
@@ -200,8 +240,9 @@ func (c *Container) Args(spec Spec, name string) ([]string, error) {
 		"--cap-drop=ALL",
 		"--security-opt=no-new-privileges",
 		// Not root, even inside a namespace: a container escape starts from
-		// whatever the process already is.
-		"--user", "65534:65534",
+		// whatever the process already is. See componentUser for why this is
+		// the runner's own uid rather than a fixed one.
+		"--user", c.user,
 		"--memory", strconv.Itoa(limits.MemoryMB) + "m",
 		"--memory-swap", strconv.Itoa(limits.MemoryMB) + "m",
 		"--cpus", limits.CPUs,
@@ -301,7 +342,7 @@ func validate(spec Spec) error {
 	if spec.Image == "" {
 		return core.New(core.CodeInvalidRequest, "a sandbox needs an image")
 	}
-	if !strings.Contains(spec.Image, "@sha256:") {
+	if !pinnedByDigest(spec.Image) {
 		// The registry already refuses a manifest pinned by tag. Checked again
 		// here because this is the process that actually runs the bytes, and a
 		// boundary that trusts its caller to have validated is not one.
@@ -317,6 +358,29 @@ func validate(spec Spec) error {
 			"socket name %q must be a file name, not a path", spec.SocketName)
 	}
 	return nil
+}
+
+// digestRef matches a bare content address: sha256 followed by 64 hex digits.
+var digestRef = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
+// pinnedByDigest reports whether a reference names immutable content.
+//
+// Two forms qualify, and they are equally immutable. A repository digest —
+// "ghcr.io/acme/guard@sha256:..." — is what a published component carries. A
+// bare image ID — "sha256:..." — is what a locally built or air-gapped image
+// has, because a repository digest only exists once something has been pushed
+// to a registry. Accepting only the first would mean an air-gapped deployment
+// could admit nothing.
+//
+// A tag qualifies as neither: it is a name that points at whatever was pushed
+// most recently, so admitting an artifact by tag admits a different one
+// tomorrow.
+func pinnedByDigest(image string) bool {
+	if digestRef.MatchString(image) {
+		return true
+	}
+	name, digest, found := strings.Cut(image, "@")
+	return found && name != "" && digestRef.MatchString(digest)
 }
 
 func truncate(s string) string {

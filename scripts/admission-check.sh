@@ -20,7 +20,18 @@ set -euo pipefail
 readonly ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 readonly ADMIN_TOKEN="admission-check-token-at-least-32-chars"
 readonly ADMIN_PORT="${ADMISSION_CHECK_PORT:-18101}"
-readonly IMAGE="ghcr.io/example/stub-guard@sha256:$(printf '0%.0s' {1..64})"
+# Real Docker when it is available, and a stub runtime otherwise. The two
+# check different things and both are worth having: the stub proves the wiring
+# on a machine with no runtime, and Docker proves the isolation flags the
+# sandbox passes actually let a well-behaved component work. A flag that is
+# wrong rather than missing — mounting the socket read-only, say — passes every
+# argv assertion and fails only here.
+RUNTIME="$ROOT/examples/admission/stub-runtime.sh"
+IMAGE="ghcr.io/example/stub-guard@sha256:$(printf '0%.0s' {1..64})"
+USING_DOCKER=no
+if [ "${ADMISSION_CHECK_RUNTIME:-auto}" != "stub" ] && docker info >/dev/null 2>&1; then
+  USING_DOCKER=yes
+fi
 
 WORK="$(mktemp -d /tmp/admcheck.XXXXXX)"
 ADMIN_PID=""
@@ -42,6 +53,71 @@ check() {
 }
 
 admin() { curl -s -H "Authorization: Bearer $ADMIN_TOKEN" "$@"; }
+
+# Each behaviour is its own image under Docker, because the sandbox passes no
+# caller-controlled environment into the container — a component that
+# misbehaves has to be different bytes, which is what it would be in reality.
+IMAGE_CONFORMING="$IMAGE"
+IMAGE_DENY_ALL="$IMAGE"
+
+# Whether the host can reach a socket a container bound on a bind mount.
+#
+# It cannot on Docker Desktop for macOS: the mount crosses a VM boundary that
+# does not proxy Unix socket connections, so the socket file appears on the
+# host and connecting to it is refused. That is the environment's limitation
+# rather than the sandbox's, and the check says so instead of reporting the
+# component as broken.
+socket_crosses_the_mount() {
+  local dir sock ok=1
+  dir="$(mktemp -d /tmp/udsprobe.XXXXXX)"
+  chmod 777 "$dir"
+  sock="$dir/probe.sock"
+
+  docker run --rm -d --name gw-uds-probe \
+    -v "$dir:/s" --user 65534:65534 \
+    -e COMPONENT_SOCKET=/s/probe.sock "$1" >/dev/null 2>&1 || {
+    rm -rf "$dir"
+    return 1
+  }
+  for _ in $(seq 1 40); do
+    [ -S "$sock" ] && curl -sf --unix-socket "$sock" http://probe/healthz >/dev/null 2>&1 && {
+      ok=0
+      break
+    }
+    sleep 0.25
+  done
+
+  docker rm -f gw-uds-probe >/dev/null 2>&1 || true
+  rm -rf "$dir"
+  return "$ok"
+}
+
+if [ "$USING_DOCKER" = yes ]; then
+  echo "==> building component images"
+  for behaviour in conforming deny-all; do
+    docker build -q --build-arg "BEHAVIOUR=$behaviour" \
+      -t "gw-stub-component:$behaviour" "$ROOT/examples/admission" >/dev/null
+  done
+  # An image ID rather than a tag: a tag names whatever was built most
+  # recently, and admitting an artifact by tag admits a different one tomorrow.
+  IMAGE_CONFORMING="$(docker images --no-trunc -q gw-stub-component:conforming)"
+  IMAGE_DENY_ALL="$(docker images --no-trunc -q gw-stub-component:deny-all)"
+
+  if socket_crosses_the_mount "$IMAGE_CONFORMING"; then
+    RUNTIME="docker"
+    echo "  using docker, conforming image $IMAGE_CONFORMING"
+  else
+    USING_DOCKER=no
+    IMAGE_CONFORMING="$IMAGE"
+    IMAGE_DENY_ALL="$IMAGE"
+    echo "  this host cannot reach a container's socket over a bind mount" \
+      "(Docker Desktop does not proxy them); using the stub runtime"
+  fi
+fi
+
+if [ "$USING_DOCKER" = no ]; then
+  echo "==> stub runtime: the wiring is checked, the isolation flags are not"
+fi
 
 echo "==> control plane: migrate, seed and start"
 export GATEWAY_DATABASE_URL="sqlite+aiosqlite:///$WORK/gateway.db"
@@ -82,7 +158,7 @@ register() {
     "http://127.0.0.1:$ADMIN_PORT/v1/components" \
     -H 'Content-Type: application/json' \
     -d "{\"name\":\"$1\",\"version\":\"1.0.0\",\"port\":\"guardrail\",
-         \"latency_budget_ms\":50,\"execution\":\"sidecar\",\"image\":\"$IMAGE\"}"
+         \"latency_budget_ms\":50,\"execution\":\"sidecar\",\"image\":\"$2\"}"
 }
 status_of() {
   admin "http://127.0.0.1:$ADMIN_PORT/v1/components/$1/1.0.0" \
@@ -93,7 +169,7 @@ build_snapshot() {
 }
 
 echo "==> register a component; it is not yet bindable"
-check "registration accepted" 201 "$(register stub-guard)"
+check "registration accepted" 201 "$(register stub-guard "$IMAGE_CONFORMING")"
 check "registered but pending" pending "$(status_of stub-guard)"
 check "a snapshot refuses to bind it" 400 "$(build_snapshot)"
 
@@ -108,13 +184,15 @@ JSON
 # check is about.
 (cd "$ROOT/dataplane" && go build -o "$WORK/admissionrunner" ./cmd/admissionrunner)
 
+# STUB_BEHAVIOUR only reaches the component under the stub runtime; under
+# Docker the behaviour is baked into the image it was registered with.
 run_admission() {
   STUB_BEHAVIOUR="$1" "$WORK/admissionrunner" \
     -control-plane "http://127.0.0.1:$ADMIN_PORT" \
     -token "$ADMIN_TOKEN" \
     -component "$2" -version 1.0.0 \
     -fixtures "$WORK/fixtures.json" \
-    -runtime "$ROOT/examples/admission/stub-runtime.sh" \
+    -runtime "$RUNTIME" \
     -report-dir "$WORK" \
     -evidence "file://$WORK/$2-1.0.0.txt" \
     >"$WORK/$2.out" 2>&1
@@ -130,7 +208,7 @@ check "the report names the suite version" 1 \
 
 echo "==> a component that misbehaves is not admitted"
 cd "$ROOT/controlplane"
-check "registration accepted" 201 "$(register deny-everything)"
+check "registration accepted" 201 "$(register deny-everything "$IMAGE_DENY_ALL")"
 cd "$ROOT/dataplane"
 run_admission deny-all deny-everything && runner_exit=0 || runner_exit=$?
 # Exit 2 is "it was tested and it failed", distinct from 1, "it could not be
