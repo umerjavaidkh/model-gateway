@@ -347,6 +347,7 @@ func run(logger *slog.Logger) error {
 	}
 	options := httpapi.Options{
 		Logger:         logger,
+		AllowedOrigins: cfg.CORSOrigins,
 		Metrics:        promhttp.HandlerFor(registry, promhttp.HandlerOpts{}),
 		TelemetryStats: emitter.Stats,
 	}

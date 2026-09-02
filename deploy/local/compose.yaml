@@ -48,6 +48,11 @@ x-worker: &worker
     # worker enforces limits per replica, which is a legitimate deployment and
     # not the one being mirrored here.
     GATEWAY_SNAPSHOT_INTERVAL: 5s
+    # The console's chat tab is served from the admin port and posts here, so
+    # the browser needs this origin named. An allowlist of exactly one entry,
+    # never "*": a wildcard would let any page a developer has open spend this
+    # fleet's budget with a key it managed to obtain.
+    GATEWAY_CORS_ORIGINS: http://localhost:18081
   depends_on:
     admin: {condition: service_healthy}
     redis: {condition: service_healthy}
@@ -97,6 +102,9 @@ services:
       <<: *controlplane-env
       GATEWAY_ADMIN_HOST: 0.0.0.0
       GATEWAY_ADMIN_PORT: "8081"
+      # Where the console's chat tab posts. The browser's view of worker-a,
+      # not the compose network's — the page runs outside this network.
+      GATEWAY_PUBLIC_URL: http://localhost:18080
     ports: ["18081:8081"]
     healthcheck:
       # A worker fails fast when it cannot reach the control plane, which is

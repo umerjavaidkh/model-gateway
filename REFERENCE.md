@@ -124,7 +124,7 @@ endpoint goes missing from a list like this.
 | `accounting_main.py` | Run the accounting consumer |
 | `admin_main.py` | Run the admin API |
 | `api/app.py` | The admin FastAPI application |
-| `api/dashboard.py` | The traffic dashboard, as one self-contained page |
+| `api/dashboard.py` | The operator console, as one self-contained page |
 | `api/idempotency.py` | Replay protection for mutations |
 | `cli.py` | Command-line entry points for the control plane |
 | `config.py` | Process configuration |
@@ -133,6 +133,7 @@ endpoint goes missing from a list like this.
 | `db/models.py` | SQLAlchemy models: the control plane's source of truth |
 | `db/repository.py` | Read the source of truth into the domain model the builder consumes |
 | `db/session.py` | Engine and session construction |
+| `db/timestamps.py` | Reading timestamps back out of the database |
 | `domain/budget.py` | Spend limits.""" |
 | `domain/catalog.py` | Model catalog: what can be called, and where it is served.""" |
 | `domain/component.py` | The component registry: what may fill a port, and what proved it can |
@@ -167,6 +168,7 @@ endpoint goes missing from a list like this.
 | `GATEWAY_CONSUMER_NAME` | `accounting_main.py` |
 | `GATEWAY_CONTROL_PLANE_TOKEN` | `config.go` |
 | `GATEWAY_CONTROL_PLANE_URL` | `config.go` |
+| `GATEWAY_CORS_ORIGINS` | `config.go` |
 | `GATEWAY_DATABASE_URL` | `accounting_main.py, admin_main.py, env.py, finetune_main.py` |
 | `GATEWAY_FINETUNE_INTERVAL` | `finetune_main.py` |
 | `GATEWAY_KEY_PEPPER` | `admin_main.py, config.go` |
@@ -174,6 +176,7 @@ endpoint goes missing from a list like this.
 | `GATEWAY_NER_SOCKET` | `config.go` |
 | `GATEWAY_OTLP_ENDPOINT` | `config.go` |
 | `GATEWAY_OTLP_INSECURE` | `config.go` |
+| `GATEWAY_PUBLIC_URL` | `admin_main.py` |
 | `GATEWAY_REDIS_URL` | `accounting_main.py, config.go` |
 | `GATEWAY_REGION` | `config.go` |
 | `GATEWAY_ROLLOUT_AUTOMATIC` | `finetune_main.py` |

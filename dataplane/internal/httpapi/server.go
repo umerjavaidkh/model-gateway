@@ -16,6 +16,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -63,6 +64,9 @@ type Server struct {
 	subStats    func() snapshot.SubscriberStats
 	routerStats func() []router.DeploymentHealth
 	guardStats  func() guardrails.Stats
+	// allowedOrigins are the browser origins permitted to call this worker.
+	// Empty means no CORS headers at all, which is the default.
+	allowedOrigins []string
 }
 
 // Options configures a Server. Fields left zero take a sensible default.
@@ -85,6 +89,15 @@ type Options struct {
 	// open. The last of those is the one that matters: a control an operator
 	// believes is enforcing and is not.
 	GuardrailStats func() guardrails.Stats
+	// AllowedOrigins are the browser origins permitted to call this worker
+	// directly. Empty — the default — sends no CORS headers at all, so a
+	// browser will not make the request.
+	//
+	// Off by default because a gateway holding provider credentials and every
+	// tenant's traffic should not become reachable from any page a user
+	// happens to open. A deployment that genuinely serves browsers names the
+	// origins it serves; nothing here accepts "*".
+	AllowedOrigins []string
 }
 
 // NewServer builds the HTTP handler set.
@@ -93,15 +106,16 @@ func NewServer(holder *snapshot.Holder, pipeline *gateway.Pipeline, opts Options
 		return nil, core.New(core.CodeInternal, "the server needs a snapshot holder and a pipeline")
 	}
 	s := &Server{
-		holder:      holder,
-		pipeline:    pipeline,
-		logger:      opts.Logger,
-		newID:       opts.NewID,
-		metrics:     opts.Metrics,
-		stats:       opts.TelemetryStats,
-		subStats:    opts.SubscriberStats,
-		routerStats: opts.RouterStats,
-		guardStats:  opts.GuardrailStats,
+		holder:         holder,
+		pipeline:       pipeline,
+		logger:         opts.Logger,
+		newID:          opts.NewID,
+		metrics:        opts.Metrics,
+		stats:          opts.TelemetryStats,
+		subStats:       opts.SubscriberStats,
+		routerStats:    opts.RouterStats,
+		guardStats:     opts.GuardrailStats,
+		allowedOrigins: opts.AllowedOrigins,
 	}
 	if s.logger == nil {
 		s.logger = slog.Default()
@@ -132,7 +146,55 @@ func (s *Server) Handler() http.Handler {
 		mux.Handle("GET /metrics", s.metrics)
 	}
 
-	return s.recoverPanics(mux)
+	return s.recoverPanics(s.withCORS(mux))
+}
+
+// withCORS answers preflights and marks responses for the origins configured.
+//
+// An allowlist, never a wildcard. "*" would make every page on the internet
+// able to spend a tenant's budget with a key it managed to obtain, and the
+// convenience of not naming origins is not worth that.
+//
+// Credentials are deliberately not allowed: this API authenticates with a
+// bearer token the caller supplies, never a cookie, so echoing
+// Allow-Credentials would enable exactly the cross-site request the token
+// model already avoids.
+func (s *Server) withCORS(next http.Handler) http.Handler {
+	if len(s.allowedOrigins) == 0 {
+		return next
+	}
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+		if origin == "" || !slices.Contains(s.allowedOrigins, origin) {
+			// Including a preflight: an unrecognised origin gets whatever the
+			// mux would have said, and no grant of any kind.
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+		// The response varies by origin, so a shared cache must not serve one
+		// origin's response to another.
+		w.Header().Add("Vary", "Origin")
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
+		// Without this the browser can read the body but not the request id,
+		// and the request id is the only handle a caller has for asking what
+		// happened to a request.
+		w.Header().Set("Access-Control-Expose-Headers",
+			strings.Join([]string{HeaderRequestID, HeaderSnapshotVersion, HeaderWarning}, ", "))
+		w.Header().Set("Access-Control-Max-Age", "600")
+
+		if r.Method == http.MethodOptions {
+			// Answered here rather than by the mux, which has no route for it
+			// and would return 405 — and a 405 to a preflight reads to a
+			// browser as "denied" with no explanation.
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) handleReady(w http.ResponseWriter, _ *http.Request) {

@@ -20,6 +20,28 @@ curl -s localhost:18080/v1/chat/completions \
 | `localhost:18080` | worker A |
 | `localhost:18090` | worker B |
 | `localhost:18081` | admin API |
+| `localhost:18081/dashboard` | the console |
+
+## The console
+
+Open <http://localhost:18081/dashboard> and paste the admin token
+(`local-development-admin-token-32ch`). Two tabs:
+
+- **Traffic** — the last hundred requests, or only the failures. Click a row
+  for its stage timings: which stage ended it, and where the time went.
+- **Chat** — send a prompt through the gateway and watch it appear in Traffic.
+  It needs a *tenant* key, not the admin token — `gw_demo_local-development-key`
+  — because it takes the same path any client does. "trace" on a reply opens
+  that request's own timings.
+
+The page holds no credential of its own: both tokens are pasted by the operator
+and live in session storage until the tab closes.
+
+The chat tab is a browser posting to a different port than the one that served
+it, so the workers name the console's origin in `GATEWAY_CORS_ORIGINS`. An
+allowlist of exactly one entry, never `*` — a wildcard would let any page a
+developer happens to have open spend this fleet's budget with a key it managed
+to obtain.
 
 ## Why containers rather than running it natively
 
