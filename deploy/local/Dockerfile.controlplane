@@ -1,0 +1,23 @@
+# The Python control plane: admin API, accounting consumer, fine-tune
+# reconciler. One image, three entry points, because they share every
+# dependency and differ only in which loop they run.
+FROM python:3.12-slim
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+WORKDIR /app
+# Locked, so the image gets the dependencies the tests ran against rather than
+# whatever resolves today.
+COPY controlplane/pyproject.toml controlplane/uv.lock ./
+RUN uv sync --frozen --no-install-project
+
+COPY controlplane/ ./
+RUN uv sync --frozen
+
+ENV PATH="/app/.venv/bin:$PATH"
+# Not root. The control plane holds the key pepper and every provider
+# credential reference; a container escape should not start as root.
+RUN useradd --create-home --uid 10001 gateway && chown -R gateway /app
+USER gateway
+
+ENTRYPOINT ["gateway-admin"]

@@ -56,6 +56,7 @@ controlplane/       Python. Registry, identity, policy authoring, snapshot compi
   api/                The admin API. Translation only.
   cli.py              gatewayctl.
 sidecars/pii-ner/   Python. Statistical PII detection, reached over a Unix socket.
+deploy/local/       The whole fleet in Linux containers, for testing like production.
 proto/              The snapshot schema. One definition, generated for both.
 examples/           A demo snapshot description.
 docs/adr/           Architecture decision records.
