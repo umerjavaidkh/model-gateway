@@ -149,7 +149,12 @@ type UsageEvent struct {
 	// was discarded. It cost real money and belongs in the record, but it is not
 	// traffic anybody was served — so accounting must be able to tell it apart
 	// rather than charging a tenant for requests they did not make.
-	Shadow        bool `protobuf:"varint,19,opt,name=shadow,proto3" json:"shadow,omitempty"`
+	Shadow bool `protobuf:"varint,19,opt,name=shadow,proto3" json:"shadow,omitempty"`
+	// stages is how long each leg of the request took, in the order they ran.
+	// Carried on the event because a trace answers "what happened to this
+	// request" and this answers "which stage is slow across a thousand of
+	// them" — and it survives without a trace backend.
+	Stages        []*StageTiming `protobuf:"bytes,20,rep,name=stages,proto3" json:"stages,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -317,6 +322,77 @@ func (x *UsageEvent) GetShadow() bool {
 	return false
 }
 
+func (x *UsageEvent) GetStages() []*StageTiming {
+	if x != nil {
+		return x.Stages
+	}
+	return nil
+}
+
+// StageTiming is one leg of the request path and what it cost.
+type StageTiming struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// name is the stage: authenticate, admit, guard, route, adapt.
+	Name       string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	DurationMs uint32 `protobuf:"varint,2,opt,name=duration_ms,json=durationMs,proto3" json:"duration_ms,omitempty"`
+	// outcome is empty when the stage passed, and otherwise the code it refused
+	// with. A stage that refused is where the request ended.
+	Outcome       string `protobuf:"bytes,3,opt,name=outcome,proto3" json:"outcome,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StageTiming) Reset() {
+	*x = StageTiming{}
+	mi := &file_gateway_v1_usage_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StageTiming) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StageTiming) ProtoMessage() {}
+
+func (x *StageTiming) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_v1_usage_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StageTiming.ProtoReflect.Descriptor instead.
+func (*StageTiming) Descriptor() ([]byte, []int) {
+	return file_gateway_v1_usage_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *StageTiming) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *StageTiming) GetDurationMs() uint32 {
+	if x != nil {
+		return x.DurationMs
+	}
+	return 0
+}
+
+func (x *StageTiming) GetOutcome() string {
+	if x != nil {
+		return x.Outcome
+	}
+	return ""
+}
+
 var File_gateway_v1_usage_proto protoreflect.FileDescriptor
 
 const file_gateway_v1_usage_proto_rawDesc = "" +
@@ -329,7 +405,7 @@ const file_gateway_v1_usage_proto_rawDesc = "" +
 	"\fcached_input\x18\x02 \x01(\x03R\vcachedInput\x12\x1f\n" +
 	"\vcache_write\x18\x03 \x01(\x03R\n" +
 	"cacheWrite\x12\x16\n" +
-	"\x06output\x18\x04 \x01(\x03R\x06output\"\xf5\x04\n" +
+	"\x06output\x18\x04 \x01(\x03R\x06output\"\xa6\x05\n" +
 	"\n" +
 	"UsageEvent\x12\x1d\n" +
 	"\n" +
@@ -358,7 +434,13 @@ const file_gateway_v1_usage_proto_rawDesc = "" +
 	"\x10snapshot_version\x18\x11 \x01(\x04R\x0fsnapshotVersion\x12\x1d\n" +
 	"\n" +
 	"budget_ids\x18\x12 \x03(\tR\tbudgetIds\x12\x16\n" +
-	"\x06shadow\x18\x13 \x01(\bR\x06shadowBIZGgithub.com/umerjavaidkh/model-gateway/dataplane/internal/wire/gatewayv1b\x06proto3"
+	"\x06shadow\x18\x13 \x01(\bR\x06shadow\x12/\n" +
+	"\x06stages\x18\x14 \x03(\v2\x17.gateway.v1.StageTimingR\x06stages\"\\\n" +
+	"\vStageTiming\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1f\n" +
+	"\vduration_ms\x18\x02 \x01(\rR\n" +
+	"durationMs\x12\x18\n" +
+	"\aoutcome\x18\x03 \x01(\tR\aoutcomeBIZGgithub.com/umerjavaidkh/model-gateway/dataplane/internal/wire/gatewayv1b\x06proto3"
 
 var (
 	file_gateway_v1_usage_proto_rawDescOnce sync.Once
@@ -372,18 +454,20 @@ func file_gateway_v1_usage_proto_rawDescGZIP() []byte {
 	return file_gateway_v1_usage_proto_rawDescData
 }
 
-var file_gateway_v1_usage_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_gateway_v1_usage_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
 var file_gateway_v1_usage_proto_goTypes = []any{
-	(*TokenUsage)(nil), // 0: gateway.v1.TokenUsage
-	(*UsageEvent)(nil), // 1: gateway.v1.UsageEvent
+	(*TokenUsage)(nil),  // 0: gateway.v1.TokenUsage
+	(*UsageEvent)(nil),  // 1: gateway.v1.UsageEvent
+	(*StageTiming)(nil), // 2: gateway.v1.StageTiming
 }
 var file_gateway_v1_usage_proto_depIdxs = []int32{
 	0, // 0: gateway.v1.UsageEvent.usage:type_name -> gateway.v1.TokenUsage
-	1, // [1:1] is the sub-list for method output_type
-	1, // [1:1] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	2, // 1: gateway.v1.UsageEvent.stages:type_name -> gateway.v1.StageTiming
+	2, // [2:2] is the sub-list for method output_type
+	2, // [2:2] is the sub-list for method input_type
+	2, // [2:2] is the sub-list for extension type_name
+	2, // [2:2] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_gateway_v1_usage_proto_init() }
@@ -397,7 +481,7 @@ func file_gateway_v1_usage_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_gateway_v1_usage_proto_rawDesc), len(file_gateway_v1_usage_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   2,
+			NumMessages:   3,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

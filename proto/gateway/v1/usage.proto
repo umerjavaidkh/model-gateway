@@ -78,4 +78,20 @@ message UsageEvent {
   // traffic anybody was served — so accounting must be able to tell it apart
   // rather than charging a tenant for requests they did not make.
   bool shadow = 19;
+
+  // stages is how long each leg of the request took, in the order they ran.
+  // Carried on the event because a trace answers "what happened to this
+  // request" and this answers "which stage is slow across a thousand of
+  // them" — and it survives without a trace backend.
+  repeated StageTiming stages = 20;
+}
+
+// StageTiming is one leg of the request path and what it cost.
+message StageTiming {
+  // name is the stage: authenticate, admit, guard, route, adapt.
+  string name = 1;
+  uint32 duration_ms = 2;
+  // outcome is empty when the stage passed, and otherwise the code it refused
+  // with. A stage that refused is where the request ended.
+  string outcome = 3;
 }

@@ -49,6 +49,7 @@ endpoint goes missing from a list like this.
 
 | Method | Path |
 |---|---|
+| `GET` | `/dashboard` |
 | `GET` | `/healthz` |
 | `PUT` | `/v1/aliases/{name}` |
 | `PUT` | `/v1/budgets/{budget_id}` |
@@ -71,6 +72,9 @@ endpoint goes missing from a list like this.
 | `POST` | `/v1/keys/{key_id}/rotate` |
 | `GET` | `/v1/policy` |
 | `PUT` | `/v1/policy` |
+| `GET` | `/v1/requests` |
+| `GET` | `/v1/requests/summary` |
+| `GET` | `/v1/requests/{request_id}` |
 | `POST` | `/v1/snapshots` |
 | `GET` | `/v1/snapshots/current` |
 | `POST` | `/v1/tenants/{tenant_id}/keys` |
@@ -120,6 +124,7 @@ endpoint goes missing from a list like this.
 | `accounting_main.py` | Run the accounting consumer |
 | `admin_main.py` | Run the admin API |
 | `api/app.py` | The admin FastAPI application |
+| `api/dashboard.py` | The traffic dashboard, as one self-contained page |
 | `api/idempotency.py` | Replay protection for mutations |
 | `cli.py` | Command-line entry points for the control plane |
 | `config.py` | Process configuration |
@@ -146,6 +151,7 @@ endpoint goes missing from a list like this.
 | `service/policy.py` | Writing a policy: the seam an external authority publishes rules through |
 | `service/provisioning.py` | Creating the things a gateway serves: tenants, models, keys, budgets |
 | `service/registry.py` | Registering components, and the gate that decides which ones are bindable |
+| `service/requests.py` | Reading what requests did, for whoever has to explain one |
 | `service/rollout.py` | Deciding whether a canary has earned its next step |
 | `service/trainer.py` | TrainerPort: the seam between a fine-tune job and whatever runs it |
 | `service/usage_stream.py` | Read usage events from the Redis stream |

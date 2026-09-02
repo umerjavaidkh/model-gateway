@@ -972,3 +972,42 @@ async def test_an_alias_points_at_models_in_order(client: AsyncClient) -> None:
 
 async def test_an_alias_with_no_targets_is_refused(client: AsyncClient) -> None:
     assert (await client.put("/v1/aliases/fast", json={"targets": []})).status_code == 422
+
+
+# --- the traffic dashboard --------------------------------------------------
+
+
+async def test_requests_are_readable_through_the_api(client: AsyncClient) -> None:
+    listed = await client.get("/v1/requests?limit=5")
+    assert listed.status_code == 200
+    assert "requests" in listed.json()
+
+    summary = await client.get("/v1/requests/summary")
+    assert summary.status_code == 200
+    assert "failures" in summary.json()
+
+
+async def test_an_unknown_request_is_a_404(client: AsyncClient) -> None:
+    assert (await client.get("/v1/requests/never-happened")).status_code == 404
+
+
+async def test_reading_traffic_needs_the_admin_token(engine: AsyncEngine) -> None:
+    # It shows every tenant's traffic. Serving it unauthenticated would make
+    # the dashboard a way to read other people's usage.
+    app = create_app(AdminSettings(engine=engine, key_pepper=PEPPER, admin_token=TOKEN))
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://admin") as anonymous:
+        assert (await anonymous.get("/v1/requests")).status_code == 401
+
+
+async def test_the_dashboard_page_carries_no_credential(engine: AsyncEngine) -> None:
+    # Served without a token because it holds no data: every fetch it makes
+    # carries the token the operator pastes in. Baking one into the page would
+    # put it in every browser cache that ever loaded it.
+    app = create_app(AdminSettings(engine=engine, key_pepper=PEPPER, admin_token=TOKEN))
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://admin") as anonymous:
+        page = await anonymous.get("/dashboard")
+
+    assert page.status_code == 200
+    assert "text/html" in page.headers["content-type"]
+    assert TOKEN not in page.text
+    assert PEPPER.decode() not in page.text
