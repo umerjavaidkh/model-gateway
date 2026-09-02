@@ -20,6 +20,7 @@ from model_gateway_control.db.session import create_engine, session_factory
 from model_gateway_control.errors import InvalidRequestError
 from model_gateway_control.service.accounting import Accountant
 from model_gateway_control.service.usage_stream import Batch, UsageStream
+from model_gateway_control.wire import usage_pb2 as pb
 
 logger = logging.getLogger("accounting")
 
@@ -64,7 +65,7 @@ async def run(
 
 
 async def _apply(
-    factory: async_sessionmaker[AsyncSession], stream: UsageStream, batch: Batch
+    factory: async_sessionmaker[AsyncSession], stream: UsageStream, batch: Batch[pb.UsageEvent]
 ) -> None:
     """Record a batch, then acknowledge it.
 

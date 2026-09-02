@@ -52,14 +52,16 @@ func (s *LogSink) Write(_ context.Context, events []core.Event) error {
 				slog.Uint64("snapshot_version", e.SnapshotVersion))
 		case core.AuditEvent:
 			s.logger.Info("audit",
+				slog.String("event_id", e.EventID),
 				slog.String("request_id", e.RequestID),
 				slog.String("tenant", string(e.Tenant)),
 				slog.String("actor", e.Actor),
 				slog.String("action", e.Action),
 				slog.String("resource", e.Resource),
 				slog.String("outcome", string(e.Outcome)),
-				slog.String("prev_hash", e.PrevHash),
-				slog.String("hash", e.Hash))
+				slog.String("reason", e.Reason),
+				slog.String("source_ip", e.SourceIP),
+				slog.Uint64("snapshot_version", e.SnapshotVersion))
 		}
 	}
 	return nil

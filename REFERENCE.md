@@ -40,6 +40,9 @@ of the code, so it cannot drift without the check in CI failing.
 | M11b — Eval gate: EvalPort, scorecards, promotion gate | **done** |
 | M11c — Weighted rollout: canary steps, multi-LoRA routing | **done** |
 | M11d — Shadow traffic: mirrored scoring, automatic promotion | **done** |
+| M12 — Provisioning API: tenants, deployments, aliases, budgets | **done** |
+| M12b — Operator console: traffic, chat, request-level detail | **done** |
+| M13 — Audit records: hash chain, append-only table, verification | **done** |
 
 ## Admin API
 
@@ -52,6 +55,9 @@ endpoint goes missing from a list like this.
 | `GET` | `/dashboard` |
 | `GET` | `/healthz` |
 | `PUT` | `/v1/aliases/{name}` |
+| `GET` | `/v1/audit` |
+| `GET` | `/v1/audit/summary` |
+| `GET` | `/v1/audit/verify` |
 | `PUT` | `/v1/budgets/{budget_id}` |
 | `GET` | `/v1/components` |
 | `POST` | `/v1/components` |
@@ -126,6 +132,7 @@ endpoint goes missing from a list like this.
 | `api/app.py` | The admin FastAPI application |
 | `api/dashboard.py` | The operator console, as one self-contained page |
 | `api/idempotency.py` | Replay protection for mutations |
+| `audit_main.py` | Run the audit consumer |
 | `cli.py` | Command-line entry points for the control plane |
 | `config.py` | Process configuration |
 | `contracts/evaluator.py` | The contract every EvalPort must satisfy |
@@ -134,6 +141,7 @@ endpoint goes missing from a list like this.
 | `db/repository.py` | Read the source of truth into the domain model the builder consumes |
 | `db/session.py` | Engine and session construction |
 | `db/timestamps.py` | Reading timestamps back out of the database |
+| `domain/audit.py` | The audit chain: what makes a deleted record detectable |
 | `domain/budget.py` | Spend limits.""" |
 | `domain/catalog.py` | Model catalog: what can be called, and where it is served.""" |
 | `domain/component.py` | The component registry: what may fill a port, and what proved it can |
@@ -146,6 +154,7 @@ endpoint goes missing from a list like this.
 | `errors.py` | The control plane's error vocabulary |
 | `finetune_main.py` | Run the fine-tune reconciler |
 | `service/accounting.py` | Fold usage back into budgets |
+| `service/audit.py` | Appending to the audit chain, and checking it afterwards |
 | `service/evaluator.py` | EvalPort: the seam between a promotion gate and whatever measures a model |
 | `service/finetune.py` | The fine-tune reconciler: what moves a job from a spec to an artifact |
 | `service/keys.py` | Issuing, rotating and revoking API keys |
@@ -155,7 +164,7 @@ endpoint goes missing from a list like this.
 | `service/requests.py` | Reading what requests did, for whoever has to explain one |
 | `service/rollout.py` | Deciding whether a canary has earned its next step |
 | `service/trainer.py` | TrainerPort: the seam between a fine-tune job and whatever runs it |
-| `service/usage_stream.py` | Read usage events from the Redis stream |
+| `service/usage_stream.py` | Read events from a Redis stream |
 | `snapshot/builder.py` | Compile the domain model into the snapshot the data plane serves from |
 
 ## Configuration
@@ -165,11 +174,11 @@ endpoint goes missing from a list like this.
 | `GATEWAY_ADMIN_HOST` | `admin_main.py` |
 | `GATEWAY_ADMIN_PORT` | `admin_main.py` |
 | `GATEWAY_ADMIN_TOKEN` | `admin_main.py` |
-| `GATEWAY_CONSUMER_NAME` | `accounting_main.py` |
+| `GATEWAY_CONSUMER_NAME` | `accounting_main.py, audit_main.py` |
 | `GATEWAY_CONTROL_PLANE_TOKEN` | `config.go` |
 | `GATEWAY_CONTROL_PLANE_URL` | `config.go` |
 | `GATEWAY_CORS_ORIGINS` | `config.go` |
-| `GATEWAY_DATABASE_URL` | `accounting_main.py, admin_main.py, env.py, finetune_main.py` |
+| `GATEWAY_DATABASE_URL` | `accounting_main.py, admin_main.py, audit_main.py, env.py, finetune_main.py` |
 | `GATEWAY_FINETUNE_INTERVAL` | `finetune_main.py` |
 | `GATEWAY_KEY_PEPPER` | `admin_main.py, config.go` |
 | `GATEWAY_LISTEN_ADDR` | `config.go` |
@@ -177,7 +186,7 @@ endpoint goes missing from a list like this.
 | `GATEWAY_OTLP_ENDPOINT` | `config.go` |
 | `GATEWAY_OTLP_INSECURE` | `config.go` |
 | `GATEWAY_PUBLIC_URL` | `admin_main.py` |
-| `GATEWAY_REDIS_URL` | `accounting_main.py, config.go` |
+| `GATEWAY_REDIS_URL` | `accounting_main.py, audit_main.py, config.go` |
 | `GATEWAY_REGION` | `config.go` |
 | `GATEWAY_ROLLOUT_AUTOMATIC` | `finetune_main.py` |
 | `GATEWAY_SIGNATURE_POLICY` | `admin_main.py` |
@@ -207,3 +216,4 @@ endpoint goes missing from a list like this.
 | [`0014-eval-gate.md`](docs/adr/0014-eval-gate.md) | ADR 0014 — The eval gate: integers, directions, and a baseline measured the same way |
 | [`0015-weighted-rollout.md`](docs/adr/0015-weighted-rollout.md) | ADR 0015 — Weight is a share of traffic, and the walk is an operator's decision |
 | [`0016-shadow-traffic.md`](docs/adr/0016-shadow-traffic.md) | ADR 0016 — Shadow traffic measures whether an adapter works, not whether it is better |
+| [`0017-audit-chain.md`](docs/adr/0017-audit-chain.md) | ADR 0017 — The audit chain is written by one consumer, and does not record every request |

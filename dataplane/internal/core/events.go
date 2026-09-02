@@ -111,21 +111,50 @@ type StageTiming struct {
 	Outcome Code
 }
 
-// AuditEvent records a security-relevant action. Consumers write these to an
-// append-only table with a hash chain; PrevHash links each record to the one
-// before it so that a deletion is detectable.
+// AuditEvent records a decision, where a UsageEvent records a measurement.
+//
+// That is the line between them: a refusal, a redaction and a configuration
+// change are things somebody decided, and they are kept append-only with a hash
+// chain and their own retention clock. Token counts are things that happened,
+// and they are aggregated and expired.
+//
+// The hash chain is deliberately not on this type. Two workers emitting
+// concurrently would each need the previous record's hash to compute their own,
+// and there is no previous record until one of them is written — so the chain
+// is computed by the single consumer that appends, not by the producers. A
+// producer that computed its own would fork the chain the moment a second
+// replica started, and a forked chain proves nothing.
 type AuditEvent struct {
+	// EventID makes the record idempotent under at-least-once delivery. The
+	// request id cannot: one request can produce both a refusal and a
+	// redaction, and a configuration change has no request at all.
+	EventID string
+	// RequestID is empty for actions that were not a request.
 	RequestID string
 	Timestamp time.Time
 
-	Tenant   TenantID
-	Actor    string // key ID, user subject, or service-account name
-	Action   string // "chat.completion", "key.rotate", "finetune.promote"
+	Tenant TenantID
+	// Actor is who did it: a key ID, a user subject, or a service-account name.
+	Actor string
+	// Action is what they did: "chat.completions", "key.issue".
+	Action string
+	// Resource is what they did it to: a model, a deployment, a component.
 	Resource string
-	Outcome  Code
+	// Outcome is empty when the action was allowed, and otherwise the code it
+	// was refused with.
+	Outcome Code
+	// Reason is the human-readable half of the outcome: which guardrail
+	// refused, which rule matched. Never the payload that triggered it — the
+	// audit tap sits after redaction precisely so this record does not become
+	// a copy of the data it exists to protect.
+	Reason string
 
-	PrevHash string
-	Hash     string
+	// SourceIP is the caller's address, for the "who, and from where" an
+	// investigation starts from.
+	SourceIP string
+	// SnapshotVersion is the configuration in force when the decision was
+	// made, which is what makes "why was this allowed in March" answerable.
+	SnapshotVersion uint64
 }
 
 // Kind identifies this as an audit record.

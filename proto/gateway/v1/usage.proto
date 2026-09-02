@@ -95,3 +95,49 @@ message StageTiming {
   // with. A stage that refused is where the request ended.
   string outcome = 3;
 }
+
+// AuditEvent records a decision, where a UsageEvent records a measurement.
+//
+// That is the line between the two, and it is why they are separate messages on
+// separate streams rather than one message with optional fields: a refusal, a
+// redaction and a configuration change are things somebody decided, and they
+// are kept append-only with a hash chain and their own retention clock. Token
+// counts are things that happened, and they are aggregated and expired.
+//
+// The chain itself is not on this message. Two workers publishing concurrently
+// would each need the previous record's hash to compute their own, and there is
+// no previous record until one of them is written — so the chain is computed by
+// the single consumer that appends, not by the producers.
+message AuditEvent {
+  // event_id makes the record idempotent under at-least-once delivery. The
+  // request id cannot: one request can produce a refusal and a redaction, and
+  // a configuration change has no request at all.
+  string event_id = 1;
+  // request_id is empty for actions that were not a request — a key rotation,
+  // a policy publication.
+  string request_id = 2;
+  int64 timestamp_unix_ms = 3;
+
+  string tenant = 4;
+  // actor is who did it: a key id, a user subject, or a service-account name.
+  string actor = 5;
+  // action is what they did: "chat.completions", "key.issue", "policy.publish".
+  string action = 6;
+  // resource is what they did it to: a model, a deployment, a component.
+  string resource = 7;
+  // outcome is empty when the action was allowed, and otherwise the code it
+  // was refused with.
+  string outcome = 8;
+  // reason is the human-readable half of the outcome: which guardrail refused,
+  // which rule matched. Never the payload that triggered it — the audit tap
+  // sits after redaction precisely so this table does not become a copy of the
+  // data it exists to protect.
+  string reason = 9;
+
+  // source_ip is the caller's address, for the "who and from where" an
+  // investigation starts from.
+  string source_ip = 10;
+  // snapshot_version is the configuration in force when the decision was made,
+  // which is what makes "why was this allowed in March" answerable.
+  uint64 snapshot_version = 11;
+}

@@ -22,6 +22,18 @@ curl -s localhost:18080/v1/chat/completions \
 | `localhost:18081` | admin API |
 | `localhost:18081/dashboard` | the console |
 
+Prove the chain does what it claims:
+
+```bash
+docker compose exec postgres psql -U gateway -d gateway \
+  -c "UPDATE audit_records SET actor='somebody-else' WHERE seq=1;"
+curl -s localhost:18081/v1/audit/verify -H "Authorization: Bearer local-development-admin-token-32ch"
+```
+
+It reports `intact: false`, the sequence number it broke at, and why. Deleting
+a row instead breaks it at the row *after* the hole, because the survivors are
+individually valid and no longer point at each other.
+
 ## The console
 
 Open <http://localhost:18081/dashboard> and paste the admin token
@@ -29,6 +41,10 @@ Open <http://localhost:18081/dashboard> and paste the admin token
 
 - **Traffic** — the last hundred requests, or only the failures. Click a row
   for its stage timings: which stage ended it, and where the time went.
+- **Audit** — the decisions: refusals, redactions, and access to classified
+  data. Each record carries the hash of the one before it, and the banner says
+  whether the chain still verifies. Ordinary successful calls are deliberately
+  not here — they are in Traffic.
 - **Chat** — send a prompt through the gateway and watch it appear in Traffic.
   It needs a *tenant* key, not the admin token — `gw_demo_local-development-key`
   — because it takes the same path any client does. "trace" on a reply opens

@@ -129,6 +129,19 @@ services:
       redis: {condition: service_healthy}
       migrate: {condition: service_completed_successfully}
 
+  # One replica, deliberately. The audit chain is serial: two appenders reading
+  # the same head write two records claiming the same predecessor, and a forked
+  # chain verifies as broken with no way to tell which half is real. The
+  # advisory lock makes a second replica safe rather than useful.
+  audit:
+    <<: *controlplane
+    entrypoint: ["gateway-audit"]
+    scale: 1
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+
   finetune:
     <<: *controlplane
     entrypoint: ["gateway-finetune"]
