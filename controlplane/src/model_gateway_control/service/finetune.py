@@ -298,21 +298,23 @@ class Reconciler:
             return job.submitted(run.external_id)
 
         run = await trainer.poll(job.status.external_id)
-        match run.state:
-            case RunState.SUCCEEDED:
-                return job.trained(run.artifact_ref, run.cost_micro_usd)
-            case RunState.FAILED:
-                return job.failed(
-                    run.reason or "the trainer reported a failure", run.cost_micro_usd
-                )
-            case RunState.UNKNOWN:
-                # The backend has lost a run it told us about. Failing is the
-                # honest answer: silently resubmitting would book a second run
-                # against a job that may still be going.
-                return job.failed(f"the trainer has no record of run {job.status.external_id!r}")
-            case _:
-                # Still going. Nothing to record but the attempt.
-                return job
+
+        if run.state is RunState.SUCCEEDED:
+            return job.trained(run.artifact_ref, run.cost_micro_usd)
+        if run.state is RunState.FAILED:
+            return job.failed(run.reason or "the trainer reported a failure", run.cost_micro_usd)
+        if run.state is RunState.UNKNOWN:
+            # The backend has lost a run it told us about. Failing is the
+            # honest answer: silently resubmitting would book a second run
+            # against a job that may still be going.
+            return job.failed(f"the trainer has no record of run {job.status.external_id!r}")
+
+        # Still running — or in a state a later version of this enum adds and
+        # this one does not know. Waiting is the safe default either way: it
+        # does nothing and the next pass asks again, whereas guessing at a
+        # meaning could mark a running job terminal, and a terminal job is one
+        # nothing will ever collect the artifact from.
+        return job
 
 
 async def _needing_work(session: AsyncSession) -> Sequence[models.FineTuneJob]:
