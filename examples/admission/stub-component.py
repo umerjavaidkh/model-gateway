@@ -79,7 +79,10 @@ def main() -> int:
         return 1
 
     with Server(path, Handler) as server:
-        os.chmod(path, 0o666)  # noqa: S103 - reachable only inside the sandbox
+        # No chmod here. A component running under a different uid from the
+        # runner has to make its socket connectable, but widening the mode is
+        # its call to make in its own image — an example that ships a
+        # world-writable socket is one people copy.
         server.serve_forever()
     return 0
 

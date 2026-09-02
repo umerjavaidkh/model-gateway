@@ -6,6 +6,11 @@
 // core.GuardrailPort. It is what the admission runner points at a sandboxed
 // component, and what a worker would use to run one in production.
 //
+// A component binds the socket named by COMPONENT_SOCKET and must make it
+// connectable by the process on the other side, which runs under a different
+// uid: the sandbox mounts a writable directory for exactly this, and the
+// component chooses how far to widen the socket itself.
+//
 // JSON over a Unix socket, matching the NER sidecar rather than introducing
 // gRPC for one more thing. The reasoning is the same and is recorded in ADR
 // 0008: this crosses a language boundary between two processes deployed
