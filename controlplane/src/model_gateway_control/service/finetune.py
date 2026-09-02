@@ -41,6 +41,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from model_gateway_control.db import models
+from model_gateway_control.db.timestamps import as_utc
 from model_gateway_control.domain.finetune import (
     TERMINAL,
     DatasetRef,
@@ -346,8 +347,11 @@ class Reconciler:
             job = to_job(row)
             health = self._health_for(session)
             # updated_at is when this step began: every status write sets it,
-            # and a step is a status write.
-            started_at = row.updated_at or self._now()
+            # and a step is a status write. Normalised because a driver that
+            # drops the timezone would otherwise make every judgement raise,
+            # and the handler below turns that into "wait" — a rollout that
+            # never advances and never aborts.
+            started_at = as_utc(row.updated_at) if row.updated_at else self._now()
 
             try:
                 verdict = await health.judge(

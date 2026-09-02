@@ -20,6 +20,11 @@ var pepper = []byte("a-test-pepper-that-is-long-enough")
 
 func newTestServer(t *testing.T) http.Handler {
 	t.Helper()
+	return newTestServerWithOrigins(t)
+}
+
+func newTestServerWithOrigins(t *testing.T, origins ...string) http.Handler {
+	t.Helper()
 
 	global, err := core.NewGlobalLayer(core.GlobalSpec{
 		Version: core.LayerVersion{Number: 42, Digest: "sha256:test"},
@@ -64,8 +69,9 @@ func newTestServer(t *testing.T) http.Handler {
 	server, err := httpapi.NewServer(holder, pipeline, httpapi.Options{
 		// Discard logs so a failing test's output is the assertion, not a wall
 		// of structured JSON.
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
-		NewID:  func() string { return "req-fixed" },
+		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		NewID:          func() string { return "req-fixed" },
+		AllowedOrigins: origins,
 	})
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)

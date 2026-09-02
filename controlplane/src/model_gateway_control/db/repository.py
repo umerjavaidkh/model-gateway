@@ -19,12 +19,13 @@ from __future__ import annotations
 
 import logging
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from model_gateway_control.db import models
+from model_gateway_control.db.timestamps import as_utc
 from model_gateway_control.domain.budget import Budget, BudgetScope
 from model_gateway_control.domain.catalog import (
     Capability,
@@ -345,16 +346,8 @@ def to_policy_rule(row: models.PolicyRule) -> PolicyRule:
 
 
 def _as_utc(when: datetime | None) -> datetime | None:
-    """Attach UTC to a naive timestamp from the database.
-
-    Columns are declared timezone-aware, but not every driver honours that —
-    SQLite has no timezone type and returns naive values. Everything written is
-    UTC, so a naive value read back is UTC; saying so here keeps the ambiguity
-    from reaching the domain model, where the next reader would have to guess.
-    """
-    if when is not None and when.tzinfo is None:
-        return when.replace(tzinfo=UTC)
-    return when
+    """:func:`as_utc`, for a column that is nullable."""
+    return None if when is None else as_utc(when)
 
 
 def _to_deployment(row: models.Deployment) -> Deployment:

@@ -19,6 +19,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from model_gateway_control.api.app import AdminSettings, create_app
+from model_gateway_control.api.dashboard import render_dashboard
 from model_gateway_control.db import models
 from model_gateway_control.db.models import Base
 from model_gateway_control.db.session import create_engine, session_factory
@@ -1023,3 +1024,33 @@ async def test_the_dashboard_page_carries_no_credential(engine: AsyncEngine) -> 
     assert "text/html" in page.headers["content-type"]
     assert TOKEN not in page.text
     assert PEPPER.decode() not in page.text
+
+
+async def test_the_dashboard_learns_where_the_gateway_is(engine: AsyncEngine) -> None:
+    # The chat tab posts to the data plane, which is a different process on a
+    # different host in every deployment that is not a laptop.
+    app = create_app(
+        AdminSettings(
+            engine=engine,
+            key_pepper=PEPPER,
+            admin_token=TOKEN,
+            gateway_url="https://gateway.internal:8443",
+        )
+    )
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://admin") as anonymous:
+        page = await anonymous.get("/dashboard")
+
+    assert '"https://gateway.internal:8443"' in page.text
+
+
+def test_a_gateway_url_cannot_break_out_of_the_script() -> None:
+    # It comes from deployment configuration rather than from a user, but a
+    # value interpolated into a <script> block is a place a quote can end a
+    # string early, and the cost of encoding it is one function call.
+    hostile = 'https://host/" ; alert(1) ; "'
+    page = render_dashboard(hostile)
+
+    # The quotes are escaped, so the string literal does not end early and the
+    # rest is inert text rather than statements.
+    assert hostile not in page
+    assert '\\" ; alert(1) ; \\"' in page
