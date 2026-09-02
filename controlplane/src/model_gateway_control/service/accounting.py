@@ -23,6 +23,7 @@ acknowledging it — and re-reading loses nothing and double-counts nothing.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -91,6 +92,20 @@ class Accountant:
             "outcome": event.outcome,
             "deployment": event.deployment,
             "shadow": event.shadow,
+            "base_model": event.base_model,
+            "adapter_id": event.adapter_id,
+            "provider": event.provider,
+            "stream": event.stream,
+            "latency_ms": event.latency_ms,
+            "time_to_first_byte_ms": event.time_to_first_byte_ms,
+            "snapshot_version": event.snapshot_version,
+            # In the order they ran, which is what makes the list readable.
+            "stages": json.dumps(
+                [
+                    {"name": s.name, "duration_ms": s.duration_ms, "outcome": s.outcome}
+                    for s in event.stages
+                ]
+            ),
         }
 
         statement = (

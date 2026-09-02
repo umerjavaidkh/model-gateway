@@ -589,6 +589,27 @@ class UsageRecord(Base):
     #: an incident about a tenant's requests.
     shadow: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=false())
 
+    #: What the request actually did, kept so a failure can be read without a
+    #: trace backend. The event carried all of this already and the consumer
+    #: was throwing it away.
+    base_model: Mapped[str] = mapped_column(String(255), nullable=False, server_default=text("''"))
+    adapter_id: Mapped[str] = mapped_column(String(255), nullable=False, server_default=text("''"))
+    provider: Mapped[str] = mapped_column(String(64), nullable=False, server_default=text("''"))
+    stream: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=false())
+    latency_ms: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    time_to_first_byte_ms: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    snapshot_version: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("0")
+    )
+    #: Per-stage timings as JSON, in the order they ran.
+    #:
+    #: JSON rather than a stages table: they are written once with the request,
+    #: read whole when somebody opens that request, and never queried across. A
+    #: join per row on a table this size would cost far more than it returns.
+    stages: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'[]'"))
+
 
 class PolicyRule(Base, TimestampMixin):
     """One rule of a tenant's policy, in evaluation order.

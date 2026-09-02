@@ -50,6 +50,16 @@ type UsageEvent struct {
 	// it is not traffic anybody was served.
 	Shadow bool
 
+	// Stages is how long each leg of the request took, in the order they ran.
+	//
+	// Recorded on the event rather than left to tracing because the two answer
+	// different questions. A trace answers "what happened to this one request"
+	// for someone who already knows which request to look at; this answers
+	// "which stage is slow" and "what did that refusal actually cost" for
+	// someone looking at a thousand of them — and it survives without a trace
+	// backend, which most deployments will not have on day one.
+	Stages []StageTiming
+
 	InputTokens  int64
 	OutputTokens int64
 	// CachedInputTokens and CacheWriteTokens are recorded separately because
@@ -88,6 +98,18 @@ func (UsageEvent) Kind() EventKind { return EventKindUsage }
 
 // OccurredAt reports when the request completed.
 func (e UsageEvent) OccurredAt() time.Time { return e.Timestamp }
+
+// StageTiming is one leg of the request path and what it cost.
+type StageTiming struct {
+	// Name is the stage: authenticate, admit, guard, route, adapt.
+	Name string
+	// Duration is wall time inside that stage.
+	Duration time.Duration
+	// Outcome is empty when the stage passed, and otherwise the code it
+	// refused with. A stage that refused is where the request ended, so this
+	// is what makes a failure readable without opening a trace.
+	Outcome Code
+}
 
 // AuditEvent records a security-relevant action. Consumers write these to an
 // append-only table with a hash chain; PrevHash links each record to the one

@@ -71,6 +71,8 @@ type Result struct {
 	Route      core.RoutingKey
 	Usage      core.TokenUsage
 	Latency    time.Duration
+	// Stages is what each leg of the request cost, in the order they ran.
+	Stages []core.StageTiming
 	// TimeToFirstByte is what a user perceives as latency on a streamed
 	// response. It is zero for a non-streaming call, where it would be the
 	// same as Latency and so says nothing.
@@ -261,12 +263,17 @@ func (p *Pipeline) Handle(ctx context.Context, snap *core.Snapshot, req *Request
 	// Emitting only on success is how a cost report quietly disagrees with an
 	// invoice.
 	var deployment core.Deployment
+	// Collected as the request walks its stages, and attached to the usage
+	// event on every exit path — including the refusals, which are the ones
+	// somebody is usually looking at.
+	var stages []core.StageTiming
 	emit := func(err error) {
 		result.Latency = p.now().Sub(started)
+		result.Stages = stages
 		p.emitUsage(ctx, snap, req, result, deployment, false, err)
 	}
 
-	principal, err := stage(ctx, "authenticate", func() (core.Principal, error) {
+	principal, err := runStage(ctx, &stages, "authenticate", func() (core.Principal, error) {
 		return p.authenticate(snap, req)
 	})
 	if err != nil {
@@ -275,7 +282,7 @@ func (p *Pipeline) Handle(ctx context.Context, snap *core.Snapshot, req *Request
 	}
 	result.Principal = principal
 
-	if _, err := stage(ctx, "admit", func() (struct{}, error) {
+	if _, err := runStage(ctx, &stages, "admit", func() (struct{}, error) {
 		return struct{}{}, p.admit(ctx, snap, &principal, req)
 	}); err != nil {
 		emit(err)
@@ -289,7 +296,7 @@ func (p *Pipeline) Handle(ctx context.Context, snap *core.Snapshot, req *Request
 	// before the gateway decides where to send it, and certainly before it
 	// sends it. The tier-dependent inspections the design places after routing
 	// are the PII chain, which is a separate stage.
-	body, err := stage(ctx, "guard", func() ([]byte, error) {
+	body, err := runStage(ctx, &stages, "guard", func() ([]byte, error) {
 		return p.guard(ctx, snap, &principal, req)
 	})
 	if err != nil {
@@ -298,7 +305,7 @@ func (p *Pipeline) Handle(ctx context.Context, snap *core.Snapshot, req *Request
 	}
 	req.Body = body
 
-	candidates, err := stage(ctx, "route", func() ([]router.Candidate, error) {
+	candidates, err := runStage(ctx, &stages, "route", func() ([]router.Candidate, error) {
 		return p.route(snap, &principal, req)
 	})
 	if err != nil {
@@ -316,7 +323,7 @@ func (p *Pipeline) Handle(ctx context.Context, snap *core.Snapshot, req *Request
 	// re-tokenises, and restoring against an earlier attempt's map would
 	// substitute the wrong values.
 	var replacements map[string]string
-	executed, err := stage(ctx, "adapt", func() (*router.Result, error) {
+	executed, err := runStage(ctx, &stages, "adapt", func() (*router.Result, error) {
 		return p.adapt(ctx, candidates, req, &principal, false, &replacements)
 	})
 	if err != nil {
@@ -474,16 +481,40 @@ func (p *Pipeline) emitShadowUsage(
 // request shows only a total, and "the gateway was slow" is not a finding. The
 // error is recorded on the span as well as returned, because a failed stage is
 // what an operator opens the trace to find.
-func stage[T any](ctx context.Context, name string, fn func() (T, error)) (T, error) {
+// runStage runs a stage and records what it cost against the request.
+//
+// A free function rather than a method because Go has no generic methods, and
+// a non-generic version would have to return `any` — which would put a type
+// assertion at every call site in the request path.
+func runStage[T any](
+	ctx context.Context, into *[]core.StageTiming, name string, fn func() (T, error),
+) (T, error) {
+	result, timing, err := timedStage(ctx, name, fn)
+	*into = append(*into, timing)
+	return result, err
+}
+
+// timedStage runs one stage inside its own span and reports what it cost.
+//
+// The span and the timing come from the same bracket deliberately: two
+// measurements of one stage taken in two places is how they come to disagree,
+// and a dashboard that disagrees with a trace is worse than either alone.
+func timedStage[T any](
+	ctx context.Context, name string, fn func() (T, error),
+) (T, core.StageTiming, error) {
 	_, span := tracing.Tracer().Start(ctx, "gateway."+name)
 	defer span.End()
 
+	started := time.Now()
 	result, err := fn()
+	timing := core.StageTiming{Name: name, Duration: time.Since(started)}
+
 	if err != nil {
+		timing.Outcome = core.CodeOf(err)
 		span.RecordError(err)
 		span.SetStatus(codes.Error, string(core.CodeOf(err)))
 	}
-	return result, err
+	return result, timing, err
 }
 
 // emitUsage builds and sends the record for one request.
@@ -522,6 +553,7 @@ func (p *Pipeline) emitUsage(ctx context.Context, snap *core.Snapshot, req *Requ
 		LatencyMs:       result.Latency.Milliseconds(),
 		TimeToFirstByte: result.TimeToFirstByte,
 		Outcome:         outcome,
+		Stages:          result.Stages,
 		SnapshotVersion: snap.GlobalVersion().Number,
 		Budgets:         budgetIDs(result.Principal.Budgets),
 	})
@@ -559,24 +591,33 @@ func (p *Pipeline) HandleStream(ctx context.Context, snap *core.Snapshot, req *R
 	started := p.now()
 	result := &StreamResult{}
 
+	// Streamed requests get the same stage spans and timings as buffered ones.
+	// They did not before, so a trace or a dashboard was blind to exactly the
+	// traffic whose latency people care about most.
+	var stages []core.StageTiming
 	emit := func(err error) {
 		r := &Result{
 			Principal:  result.Principal,
 			Deployment: result.Deployment,
 			Route:      result.Route,
 			Latency:    p.now().Sub(started),
+			Stages:     stages,
 		}
 		p.emitUsage(ctx, snap, req, r, result.deployment, true, err)
 	}
 
-	principal, err := p.authenticate(snap, req)
+	principal, err := runStage(ctx, &stages, "authenticate", func() (core.Principal, error) {
+		return p.authenticate(snap, req)
+	})
 	if err != nil {
 		emit(err)
 		return result, err
 	}
 	result.Principal = principal
 
-	if err := p.admit(ctx, snap, &principal, req); err != nil {
+	if _, err := runStage(ctx, &stages, "admit", func() (struct{}, error) {
+		return struct{}{}, p.admit(ctx, snap, &principal, req)
+	}); err != nil {
 		emit(err)
 		return result, err
 	}
@@ -584,14 +625,18 @@ func (p *Pipeline) HandleStream(ctx context.Context, snap *core.Snapshot, req *R
 	// mean anything for a response that takes a minute. Released by Finish.
 	result.releaseLimit = func() { p.limiter.Release(&principal) }
 
-	body, err := p.guard(ctx, snap, &principal, req)
+	body, err := runStage(ctx, &stages, "guard", func() ([]byte, error) {
+		return p.guard(ctx, snap, &principal, req)
+	})
 	if err != nil {
 		emit(err)
 		return result, err
 	}
 	req.Body = body
 
-	candidates, err := p.route(snap, &principal, req)
+	candidates, err := runStage(ctx, &stages, "route", func() ([]router.Candidate, error) {
+		return p.route(snap, &principal, req)
+	})
 	if err != nil {
 		emit(err)
 		return result, err
@@ -601,7 +646,9 @@ func (p *Pipeline) HandleStream(ctx context.Context, snap *core.Snapshot, req *R
 	// has been relayed the response is committed and failing over would send
 	// the caller two different answers concatenated.
 	var replacements map[string]string
-	executed, err := p.adapt(ctx, candidates, req, &principal, true, &replacements)
+	executed, err := runStage(ctx, &stages, "adapt", func() (*router.Result, error) {
+		return p.adapt(ctx, candidates, req, &principal, true, &replacements)
+	})
 	if err != nil {
 		if executed != nil && len(executed.Attempts) > 0 {
 			result.Deployment = executed.Attempts[len(executed.Attempts)-1].Deployment

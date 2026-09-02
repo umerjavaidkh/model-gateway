@@ -484,7 +484,8 @@ async def test_retiring_leaves_the_record_and_stops_binding(client: AsyncClient)
     assert retired.status_code == 200
     assert retired.json()["status"] == "retired"
     # Not a deletion: what was once bindable stays answerable.
-    assert (await client.get("/v1/components/presidio/2.1.0")).json()["status"] == "retired"
+    fetched = await client.get("/v1/components/presidio/2.1.0")
+    assert fetched.json()["status"] == "retired"
 
 
 async def test_components_can_be_listed_by_port(client: AsyncClient) -> None:
@@ -759,7 +760,8 @@ async def test_a_dataset_without_a_checksum_is_refused(training_client: AsyncCli
 async def test_resubmitting_the_same_job_name_is_a_conflict(
     training_client: AsyncClient,
 ) -> None:
-    assert (await training_client.post("/v1/finetune/jobs", json=_job_body())).status_code == 201
+    created = await training_client.post("/v1/finetune/jobs", json=_job_body())
+    assert created.status_code == 201
 
     response = await training_client.post("/v1/finetune/jobs", json=_job_body())
 
@@ -847,3 +849,177 @@ async def test_steps_that_go_backwards_are_refused(training_client: AsyncClient)
 
     assert response.status_code == 400
     assert "ascend" in response.text
+
+
+# --- provisioning -----------------------------------------------------------
+
+
+def _deployment_body(**overrides: object) -> dict[str, object]:
+    body: dict[str, object] = {
+        "base_model": "qwen2.5:0.5b",
+        "provider": "openai-compatible",
+        "endpoint": "http://ollama:11434/v1",
+        "trust_tier": 3,
+        "input_cost_micro_usd": 100,
+        "output_cost_micro_usd": 200,
+    }
+    body.update(overrides)
+    return body
+
+
+async def test_a_deployment_needs_only_what_the_caller_actually_knows(
+    client: AsyncClient,
+) -> None:
+    # The table has thirteen NOT NULL columns and no defaults. Making a caller
+    # supply all of them is how a deployment ends up with a cost of zero that
+    # nobody notices until the invoice — and it is what made registering a
+    # model three failed INSERTs before this existed.
+    response = await client.put("/v1/deployments/qwen-1", json=_deployment_body())
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["base_model"] == "qwen2.5:0.5b"
+    # Serving by default: weight zero is where a canary starts, not where a
+    # model an operator just added should sit silently doing nothing.
+    assert body["weight"] == 100
+    assert body["adapter_id"] == ""
+
+
+async def test_putting_a_deployment_twice_updates_rather_than_duplicates(
+    client: AsyncClient,
+) -> None:
+    # A deploy script restating its position must not create a second
+    # deployment, and a retry after a crash must be free.
+    await client.put("/v1/deployments/qwen-1", json=_deployment_body())
+    await client.put(
+        "/v1/deployments/qwen-1", json=_deployment_body(endpoint="http://elsewhere:8000/v1")
+    )
+
+    listed = (await client.get("/v1/deployments")).json()["deployments"]
+
+    assert len([d for d in listed if d["id"] == "qwen-1"]) == 1
+    assert listed[0]["endpoint"] == "http://elsewhere:8000/v1"
+
+
+async def test_a_deployment_without_a_trust_tier_is_refused(client: AsyncClient) -> None:
+    # An unset tier is filtered out of every candidate list, so the deployment
+    # would exist and never serve — which looks like a routing bug.
+    response = await client.put("/v1/deployments/qwen-1", json=_deployment_body(trust_tier=0))
+
+    assert response.status_code == 400
+    assert "trust tier" in response.text
+
+
+async def test_a_deployment_can_be_removed(client: AsyncClient) -> None:
+    await client.put("/v1/deployments/qwen-1", json=_deployment_body())
+
+    # Bound first, never called inside an assert: python -O strips assertions,
+    # and the request would go with them.
+    deleted = await client.delete("/v1/deployments/qwen-1")
+    assert deleted.status_code == 204
+
+    listed = await client.get("/v1/deployments")
+    assert listed.json()["deployments"] == []
+
+    again = await client.delete("/v1/deployments/qwen-1")
+    assert again.status_code == 404
+
+
+async def test_a_tenant_arrives_with_somewhere_to_hang_a_key(client: AsyncClient) -> None:
+    # A tenant with no application cannot own a key. Making that a separate
+    # call only means everyone makes both, and whoever forgets gets a foreign
+    # key error rather than an explanation.
+    created = await client.put("/v1/tenants/acme", json={"tier": "enterprise"})
+    assert created.status_code == 200, created.text
+
+    issued = await client.post(
+        "/v1/tenants/acme/keys", json={"key_id": "ada", "application_id": "acme-app"}
+    )
+    assert issued.status_code == 201, issued.text
+    # The only time the secret exists outside the holder's hands.
+    assert issued.json()["presented"].startswith("gw_acme_")
+
+
+async def test_putting_a_tenant_twice_does_not_make_a_second_one(
+    client: AsyncClient,
+) -> None:
+    first = await client.put("/v1/tenants/acme", json={"tier": "standard"})
+    second = await client.put("/v1/tenants/acme", json={"tier": "enterprise"})
+
+    assert first.json()["id"] == second.json()["id"] == "acme"
+    assert second.json()["tier"] == "enterprise"
+    # The layer version moves, because workers refuse one that went backwards
+    # and a configuration change has to reach them.
+    assert second.json()["version"] > first.json()["version"]
+
+
+async def test_a_budget_can_be_raised_without_forgetting_what_was_spent(
+    client: AsyncClient,
+) -> None:
+    # Spend is a fact the accounting consumer owns. Letting provisioning zero
+    # it would make the arithmetic disagree with the invoice, silently and in
+    # the flattering direction.
+    await client.put("/v1/tenants/acme", json={})
+    await client.put("/v1/budgets/monthly", json={"tenant": "acme", "limit_micro_usd": 1_000_000})
+    raised = await client.put(
+        "/v1/budgets/monthly", json={"tenant": "acme", "limit_micro_usd": 5_000_000}
+    )
+
+    assert raised.status_code == 200
+    assert raised.json()["limit_micro_usd"] == 5_000_000
+    assert raised.json()["spent_micro_usd"] == 0
+
+
+async def test_an_alias_points_at_models_in_order(client: AsyncClient) -> None:
+    response = await client.put(
+        "/v1/aliases/fast", json={"targets": ["qwen2.5:0.5b", "gpt-4o-mini"]}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["targets"] == ["qwen2.5:0.5b", "gpt-4o-mini"]
+
+
+async def test_an_alias_with_no_targets_is_refused(client: AsyncClient) -> None:
+    empty = await client.put("/v1/aliases/fast", json={"targets": []})
+    assert empty.status_code == 422
+
+
+# --- the traffic dashboard --------------------------------------------------
+
+
+async def test_requests_are_readable_through_the_api(client: AsyncClient) -> None:
+    listed = await client.get("/v1/requests?limit=5")
+    assert listed.status_code == 200
+    assert "requests" in listed.json()
+
+    summary = await client.get("/v1/requests/summary")
+    assert summary.status_code == 200
+    assert "failures" in summary.json()
+
+
+async def test_an_unknown_request_is_a_404(client: AsyncClient) -> None:
+    missing = await client.get("/v1/requests/never-happened")
+    assert missing.status_code == 404
+
+
+async def test_reading_traffic_needs_the_admin_token(engine: AsyncEngine) -> None:
+    # It shows every tenant's traffic. Serving it unauthenticated would make
+    # the dashboard a way to read other people's usage.
+    app = create_app(AdminSettings(engine=engine, key_pepper=PEPPER, admin_token=TOKEN))
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://admin") as anonymous:
+        refused = await anonymous.get("/v1/requests")
+    assert refused.status_code == 401
+
+
+async def test_the_dashboard_page_carries_no_credential(engine: AsyncEngine) -> None:
+    # Served without a token because it holds no data: every fetch it makes
+    # carries the token the operator pastes in. Baking one into the page would
+    # put it in every browser cache that ever loaded it.
+    app = create_app(AdminSettings(engine=engine, key_pepper=PEPPER, admin_token=TOKEN))
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://admin") as anonymous:
+        page = await anonymous.get("/dashboard")
+
+    assert page.status_code == 200
+    assert "text/html" in page.headers["content-type"]
+    assert TOKEN not in page.text
+    assert PEPPER.decode() not in page.text

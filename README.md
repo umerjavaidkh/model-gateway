@@ -60,6 +60,7 @@ deploy/local/       The whole fleet in Linux containers, for testing like produc
 proto/              The snapshot schema. One definition, generated for both.
 examples/           A demo snapshot description.
 docs/adr/           Architecture decision records.
+REFERENCE.md        Generated index: every endpoint, module, variable and ADR.
 ```
 
 **`internal/core` imports nothing** — not from the rest of this module, not from

@@ -12,6 +12,7 @@ package redisstream
 
 import (
 	"context"
+	"math"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -152,6 +153,7 @@ func encode(e core.UsageEvent) *pb.UsageEvent {
 		BaseModel:       e.Route.BaseModel,
 		AdapterId:       e.Route.AdapterID,
 		Shadow:          e.Shadow,
+		Stages:          encodeStages(e.Stages),
 		Provider:        e.Provider,
 		Stream:          e.Stream,
 		Usage: &pb.TokenUsage{
@@ -168,4 +170,32 @@ func encode(e core.UsageEvent) *pb.UsageEvent {
 		SnapshotVersion:   e.SnapshotVersion,
 		BudgetIds:         budgets,
 	}
+}
+
+// encodeStages narrows stage durations to the wire's milliseconds.
+//
+// Clamped rather than converted: a negative duration cannot come from a
+// monotonic clock, but an unchecked conversion would wrap it into an enormous
+// unsigned value and put a stage that took four billion milliseconds on
+// somebody's dashboard.
+func encodeStages(stages []core.StageTiming) []*pb.StageTiming {
+	if len(stages) == 0 {
+		return nil
+	}
+	out := make([]*pb.StageTiming, 0, len(stages))
+	for _, stage := range stages {
+		ms := stage.Duration.Milliseconds()
+		if ms < 0 {
+			ms = 0
+		}
+		if ms > math.MaxUint32 {
+			ms = math.MaxUint32
+		}
+		out = append(out, &pb.StageTiming{
+			Name:       stage.Name,
+			DurationMs: uint32(ms),
+			Outcome:    string(stage.Outcome),
+		})
+	}
+	return out
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -354,5 +355,54 @@ func TestAStreamReleasesItsSlotOnlyWhenItFinishes(t *testing.T) {
 	}
 	if got := limiter.tokens.Load(); got != 8 {
 		t.Fatalf("recorded %d tokens, want 8", got)
+	}
+}
+
+func TestAUsageEventCarriesWhatEachStageCost(t *testing.T) {
+	// The dashboard's whole point: "which stage is slow" and "where did this
+	// request die" answered without a trace backend, which most deployments
+	// will not have on day one.
+	p, sink := pipelineWithCollector(t)
+	snap := buildSnapshot(t, snapshotOpts{})
+
+	if _, err := p.Handle(t.Context(), snap, request("echo-model", "gw_acme_secret-1")); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+
+	stages := sink.only(t).Stages
+	names := make([]string, 0, len(stages))
+	for _, stage := range stages {
+		names = append(names, stage.Name)
+	}
+
+	// In the order they ran, which is what makes the list readable.
+	want := []string{"authenticate", "admit", "guard", "route", "adapt"}
+	if !slices.Equal(names, want) {
+		t.Fatalf("stages = %v, want %v", names, want)
+	}
+	for _, stage := range stages {
+		if stage.Outcome != "" {
+			t.Fatalf("stage %q reported %q on a successful request", stage.Name, stage.Outcome)
+		}
+	}
+}
+
+func TestARefusedRequestSaysWhichStageRefusedIt(t *testing.T) {
+	// A failure is the case somebody is actually looking at, so the record has
+	// to name the stage that ended it rather than only the final code.
+	p, sink := pipelineWithCollector(t)
+	snap := buildSnapshot(t, snapshotOpts{})
+
+	_, err := p.Handle(t.Context(), snap, request("echo-model", "gw_acme_wrong-secret"))
+	if err == nil {
+		t.Fatal("a forged key was accepted")
+	}
+
+	stages := sink.only(t).Stages
+	if len(stages) != 1 || stages[0].Name != "authenticate" {
+		t.Fatalf("stages = %+v, want the one stage that ran", stages)
+	}
+	if stages[0].Outcome != core.CodeUnauthenticated {
+		t.Fatalf("outcome = %q, want the code the stage refused with", stages[0].Outcome)
 	}
 }

@@ -124,7 +124,8 @@ async def test_the_default_gate_admits_nothing(session: AsyncSession) -> None:
     with pytest.raises(ForbiddenError, match="no admission gate is configured"):
         await service.admit("presidio", "2.1.0")
 
-    assert (await service.get("presidio", "2.1.0")).status is Status.PENDING
+    stored = await service.get("presidio", "2.1.0")
+    assert stored.status is Status.PENDING
 
 
 async def test_a_passing_gate_activates(session: AsyncSession) -> None:

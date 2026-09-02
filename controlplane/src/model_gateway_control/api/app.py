@@ -17,13 +17,16 @@ from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from model_gateway_control.api import idempotency
+from model_gateway_control.api.dashboard import DASHBOARD_HTML
 from model_gateway_control.db.repository import Repository
 from model_gateway_control.db.session import session_factory
-from model_gateway_control.domain.catalog import TrustTier
+from model_gateway_control.domain.budget import BudgetScope
+from model_gateway_control.domain.catalog import Capability, TrustTier
 from model_gateway_control.domain.component import (
     Admission,
     Component,
@@ -39,6 +42,7 @@ from model_gateway_control.domain.finetune import (
 )
 from model_gateway_control.domain.finetune import Spec as FineTuneSpec
 from model_gateway_control.domain.identity import RateLimit
+from model_gateway_control.domain.policy import PolicyBundle, PolicyEffect, PolicyRule
 from model_gateway_control.domain.scorecard import BASIS_POINTS, PromotionGate, Scorecard
 from model_gateway_control.domain.signing import Signature, TrustStore
 from model_gateway_control.errors import (
@@ -50,7 +54,10 @@ from model_gateway_control.errors import (
 )
 from model_gateway_control.service.finetune import Evaluators, FineTuneService, Trainers
 from model_gateway_control.service.keys import KeyService
+from model_gateway_control.service.policy import PolicyService
+from model_gateway_control.service.provisioning import DeploymentSpec, ProvisioningService
 from model_gateway_control.service.registry import RegistryService
+from model_gateway_control.service.requests import RequestLog, RequestRecord
 from model_gateway_control.snapshot import build_snapshot
 
 #: Gateway error to HTTP status. The only place that knows both, which is what
@@ -417,6 +424,156 @@ def create_app(settings: AdminSettings) -> FastAPI:
         await session.commit()
         return _json_response(status.HTTP_200_OK, _job_json(job))
 
+    # --- provisioning -----------------------------------------------------
+    #
+    # PUT rather than POST for everything but a key: the caller states the
+    # configuration it wants and the gateway makes it so, whether or not it
+    # already existed. A deploy script or a compliance engine restating its
+    # position should not have to work out what it said last time, and a retry
+    # after a crash must not be a second tenant.
+
+    @app.put("/v1/tenants/{tenant}", dependencies=[Authorized])
+    async def put_tenant(tenant: str, body: PutTenantRequest, session: Session) -> Response:
+        row = await ProvisioningService(session).ensure_tenant(
+            tenant, tier=body.tier, min_trust_tier=body.min_trust_tier
+        )
+        await session.commit()
+        return _json_response(
+            status.HTTP_200_OK,
+            {"id": row.id, "tier": row.tier, "version": row.version, "key_prefix": row.id},
+        )
+
+    @app.put("/v1/deployments/{deployment_id}", dependencies=[Authorized])
+    async def put_deployment(
+        deployment_id: str, body: PutDeploymentRequest, session: Session
+    ) -> Response:
+        row = await ProvisioningService(session).ensure_deployment(body.to_spec(deployment_id))
+        await session.commit()
+        return _json_response(status.HTTP_200_OK, _deployment_json(row))
+
+    @app.get("/v1/deployments", dependencies=[Authorized])
+    async def list_deployments(session: Session) -> Response:
+        rows = await ProvisioningService(session).list_deployments()
+        return _json_response(
+            status.HTTP_200_OK, {"deployments": [_deployment_json(r) for r in rows]}
+        )
+
+    @app.delete(
+        "/v1/deployments/{deployment_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        dependencies=[Authorized],
+    )
+    async def delete_deployment(deployment_id: str, session: Session) -> Response:
+        await ProvisioningService(session).remove_deployment(deployment_id)
+        await session.commit()
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @app.put("/v1/aliases/{name}", dependencies=[Authorized])
+    async def put_alias(name: str, body: PutAliasRequest, session: Session) -> Response:
+        await ProvisioningService(session).ensure_alias(name, body.targets)
+        await session.commit()
+        return _json_response(status.HTTP_200_OK, {"name": name, "targets": body.targets})
+
+    @app.put("/v1/budgets/{budget_id}", dependencies=[Authorized])
+    async def put_budget(budget_id: str, body: PutBudgetRequest, session: Session) -> Response:
+        row = await ProvisioningService(session).ensure_budget(
+            budget_id,
+            tenant_id=body.tenant,
+            limit_micro_usd=body.limit_micro_usd,
+            scope=body.scope,
+            hard=body.hard,
+            headroom_basis_points=body.headroom_basis_points,
+        )
+        await session.commit()
+        return _json_response(
+            status.HTTP_200_OK,
+            {
+                "id": row.id,
+                "tenant": row.tenant_id,
+                "limit_micro_usd": row.limit_micro_usd,
+                "spent_micro_usd": row.spent_micro_usd,
+                "hard": row.hard,
+            },
+        )
+
+    # --- what traffic did -------------------------------------------------
+    #
+    # Read-only, and separate from the metrics endpoint on purpose: Prometheus
+    # answers "how many, how fast" across everything, and these answer "what
+    # happened to this one" for whoever has to explain it.
+
+    @app.get("/v1/requests", dependencies=[Authorized])
+    async def list_requests(
+        session: Session,
+        limit: int = 100,
+        failed: bool = False,
+        tenant: str | None = None,
+        shadow: bool = False,
+    ) -> Response:
+        records = await RequestLog(session).recent(
+            limit=limit, failed_only=failed, tenant=tenant, include_shadow=shadow
+        )
+        return _json_response(status.HTTP_200_OK, {"requests": [_request_json(r) for r in records]})
+
+    @app.get("/v1/requests/summary", dependencies=[Authorized])
+    async def request_summary(session: Session) -> Response:
+        return _json_response(
+            status.HTTP_200_OK, {"failures": await RequestLog(session).failure_summary()}
+        )
+
+    @app.get("/v1/requests/{request_id}", dependencies=[Authorized])
+    async def get_request(request_id: str, session: Session) -> Response:
+        record = await RequestLog(session).get(request_id)
+        return _json_response(status.HTTP_200_OK, _request_json(record))
+
+    @app.get("/dashboard", response_class=HTMLResponse, dependencies=[])
+    async def dashboard() -> HTMLResponse:
+        """A page for watching traffic.
+
+        Served from the admin API rather than as its own deployable: it is a
+        read-only view over data this process already has, and a second
+        container with its own build and its own CVE surface would be a lot of
+        machinery for one page.
+
+        Unauthenticated *here* because the page holds no data — every fetch it
+        makes carries the token the operator pastes in, and is authorised like
+        any other call. Shipping the token inside the page would put it in
+        every browser cache that ever loaded it.
+        """
+        return HTMLResponse(DASHBOARD_HTML)
+
+    # --- policy -----------------------------------------------------------
+    #
+    # The gateway evaluates policy; it does not decide what it should be. This
+    # is where an external authority — a compliance engine, an operator, an
+    # agent — publishes that decision. Workers compile it into their next
+    # snapshot and evaluate it locally, so a rule costs nothing per request and
+    # the authority being unreachable freezes policy rather than stopping
+    # traffic.
+
+    @app.put("/v1/policy", dependencies=[Authorized])
+    async def put_fleet_policy(body: PutPolicyRequest, session: Session) -> Response:
+        bundle = await PolicyService(session).replace(None, [r.to_rule() for r in body.rules])
+        await session.commit()
+        return _json_response(status.HTTP_200_OK, _policy_json(bundle))
+
+    @app.get("/v1/policy", dependencies=[Authorized])
+    async def get_fleet_policy(session: Session) -> Response:
+        return _json_response(
+            status.HTTP_200_OK, _policy_json(await PolicyService(session).get(None))
+        )
+
+    @app.put("/v1/tenants/{tenant}/policy", dependencies=[Authorized])
+    async def put_tenant_policy(tenant: str, body: PutPolicyRequest, session: Session) -> Response:
+        bundle = await PolicyService(session).replace(tenant, [r.to_rule() for r in body.rules])
+        await session.commit()
+        return _json_response(status.HTTP_200_OK, _policy_json(bundle))
+
+    @app.get("/v1/tenants/{tenant}/policy", dependencies=[Authorized])
+    async def get_tenant_policy(tenant: str, session: Session) -> Response:
+        bundle = await PolicyService(session).get(tenant)
+        return _json_response(status.HTTP_200_OK, _policy_json(bundle))
+
     @app.get("/v1/components", dependencies=[Authorized])
     async def list_components(session: Session, port: Port | None = None) -> Response:
         components = await RegistryService(session).list(port)
@@ -503,6 +660,178 @@ def create_app(settings: AdminSettings) -> FastAPI:
         )
 
     return app
+
+
+class PutTenantRequest(BaseModel):
+    """A tenant, and the hierarchy a key hangs off."""
+
+    tier: str = "standard"
+    min_trust_tier: TrustTier = TrustTier.EXTERNAL
+
+
+class PutDeploymentRequest(BaseModel):
+    """Somewhere a model can be served from."""
+
+    base_model: str = Field(min_length=1, max_length=255)
+    provider: str = Field(min_length=1, max_length=64)
+    endpoint: str = Field(min_length=1, max_length=1024)
+    trust_tier: TrustTier
+    adapter_id: str = ""
+    region: str = ""
+    credential_ref: str = ""
+    weight: int = Field(default=100, ge=0, le=100)
+    input_cost_micro_usd: int = Field(default=0, ge=0)
+    output_cost_micro_usd: int = Field(default=0, ge=0)
+    cached_input_cost_micro_usd: int = Field(default=0, ge=0)
+    cache_write_cost_micro_usd: int = Field(default=0, ge=0)
+    capabilities: list[Capability] = Field(default_factory=list)
+
+    def to_spec(self, deployment_id: str) -> DeploymentSpec:
+        return DeploymentSpec(
+            id=deployment_id,
+            base_model=self.base_model,
+            provider=self.provider,
+            endpoint=self.endpoint,
+            trust_tier=self.trust_tier,
+            adapter_id=self.adapter_id,
+            region=self.region,
+            credential_ref=self.credential_ref,
+            weight=self.weight,
+            input_cost_micro_usd=self.input_cost_micro_usd,
+            output_cost_micro_usd=self.output_cost_micro_usd,
+            cached_input_cost_micro_usd=self.cached_input_cost_micro_usd,
+            cache_write_cost_micro_usd=self.cache_write_cost_micro_usd,
+            capabilities=tuple(self.capabilities),
+        )
+
+
+class PutAliasRequest(BaseModel):
+    """A friendly name for one or more base models, in preference order."""
+
+    targets: list[str] = Field(min_length=1)
+
+
+class PutBudgetRequest(BaseModel):
+    """A spending limit. Spend itself is never set here."""
+
+    tenant: str = Field(min_length=1, max_length=64)
+    limit_micro_usd: int = Field(ge=0)
+    scope: BudgetScope = BudgetScope.ORG
+    hard: bool = True
+    headroom_basis_points: int = Field(default=500, ge=0, le=BASIS_POINTS)
+
+
+class PolicyRuleRequest(BaseModel):
+    """One rule, as an external authority publishes it."""
+
+    id: str = Field(min_length=1, max_length=64)
+    effect: PolicyEffect
+    models: list[str] = Field(default_factory=list)
+    endpoints: list[str] = Field(default_factory=list)
+    roles: list[str] = Field(default_factory=list)
+    regions: list[str] = Field(default_factory=list)
+    source_cidrs: list[str] = Field(default_factory=list)
+    max_payload_bytes: int = Field(default=0, ge=0)
+    data_class: str = ""
+    min_trust_tier: TrustTier = TrustTier.UNSET
+    #: Returned to the caller on a denial, so it must be safe to disclose.
+    reason: str = ""
+
+    def to_rule(self) -> PolicyRule:
+        return PolicyRule(
+            id=self.id,
+            effect=self.effect,
+            models=tuple(self.models),
+            endpoints=tuple(self.endpoints),
+            roles=tuple(self.roles),
+            regions=tuple(self.regions),
+            source_cidrs=tuple(self.source_cidrs),
+            max_payload_bytes=self.max_payload_bytes,
+            data_class=self.data_class,
+            min_trust_tier=self.min_trust_tier,
+            reason=self.reason,
+        )
+
+
+class PutPolicyRequest(BaseModel):
+    """A whole rule set, in evaluation order.
+
+    Whole rather than a patch: an authority restating its current position
+    should be able to send that position without first working out what it said
+    last time. It also makes a retry free, which matters when the publisher is
+    a program that may crash mid-publish.
+    """
+
+    rules: list[PolicyRuleRequest] = Field(default_factory=list)
+
+
+def _request_json(record: RequestRecord) -> dict[str, Any]:
+    return {
+        "request_id": record.request_id,
+        "occurred_at": record.occurred_at.isoformat(),
+        "tenant": record.tenant,
+        "key_id": record.key_id,
+        "deployment": record.deployment,
+        "base_model": record.base_model,
+        "adapter_id": record.adapter_id,
+        "provider": record.provider,
+        "stream": record.stream,
+        "shadow": record.shadow,
+        "outcome": record.outcome,
+        # Which stage ended it. The final code says what went wrong; this says
+        # where, which is what decides who looks at it next.
+        "failed_at": record.failed_at,
+        "latency_ms": record.latency_ms,
+        "time_to_first_byte_ms": record.time_to_first_byte_ms,
+        "input_tokens": record.input_tokens,
+        "output_tokens": record.output_tokens,
+        "cost_micro_usd": record.cost_micro_usd,
+        "price_micro_usd": record.price_micro_usd,
+        "snapshot_version": record.snapshot_version,
+        "stages": [
+            {"name": s.name, "duration_ms": s.duration_ms, "outcome": s.outcome}
+            for s in record.stages
+        ],
+    }
+
+
+def _deployment_json(row: Any) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "base_model": row.base_model,
+        "adapter_id": row.adapter_id,
+        "provider": row.provider,
+        "endpoint": row.endpoint,
+        "region": row.region,
+        "trust_tier": row.trust_tier,
+        "credential_ref": row.credential_ref,
+        "weight": row.weight,
+        "capabilities": sorted(c.name for c in row.capabilities),
+    }
+
+
+def _policy_json(bundle: PolicyBundle) -> dict[str, Any]:
+    return {
+        "id": bundle.id,
+        # Order is the whole of the conflict resolution — first match wins — so
+        # it is returned as a list and never as a set.
+        "rules": [
+            {
+                "id": rule.id,
+                "effect": str(rule.effect),
+                "models": list(rule.models),
+                "endpoints": list(rule.endpoints),
+                "roles": list(rule.roles),
+                "regions": list(rule.regions),
+                "source_cidrs": list(rule.source_cidrs),
+                "max_payload_bytes": rule.max_payload_bytes,
+                "data_class": rule.data_class,
+                "min_trust_tier": int(rule.min_trust_tier),
+                "reason": rule.reason,
+            }
+            for rule in bundle.rules
+        ],
+    }
 
 
 class SubmitFineTuneJobRequest(BaseModel):

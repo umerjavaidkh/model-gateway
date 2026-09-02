@@ -68,6 +68,10 @@ services:
 
   redis:
     image: redis:7
+    # Published so a stream consumer outside the compose network — the brain
+    # simulator, a SIEM forwarder, anything — can attach without being part of
+    # the deployment. That is the whole point of the stream seam.
+    ports: ["16379:6379"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 2s
@@ -168,7 +172,26 @@ services:
     <<: *ner
     volumes: ["ner-b:/run/pii"]
 
+  # A real model, so the numbers are real: tokens counted rather than invented,
+  # latency that varies, a provider that can actually be slow. Qwen 0.5B fits
+  # on a laptop and is the smallest thing that still exercises the whole path.
+  #
+  # Under the `model` profile so `make local-up` stays fast for anyone who only
+  # wants the gateway. `make local-qwen` brings it up and pulls the weights.
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["model"]
+    ports: ["11434:11434"]
+    volumes: ["ollama:/root/.ollama"]
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+
 volumes:
   pgdata:
+  ollama:
   ner-a:
   ner-b:

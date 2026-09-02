@@ -118,6 +118,9 @@ jobs:
       # either side cannot show the loop: the control plane's tests fake the
       # verdict, and the runner's tests fake the control plane.
       - run: ./scripts/admission-check.sh
+      # A reference nobody regenerates is worse than none: people stop checking
+      # the code and start trusting a stale file.
+      - run: make reference-check
 
   controlplane:
     name: Control plane (Python)

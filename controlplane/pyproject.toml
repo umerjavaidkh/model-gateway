@@ -58,6 +58,12 @@ extend-exclude = [
     "src/model_gateway_control/db/migrations/versions",
 ]
 
+[tool.ruff.lint.per-file-ignores]
+# An embedded HTML/JS template. A line-length rule measures the wrong thing
+# here — wrapping markup to satisfy it makes the page harder to read, not
+# easier, and the file contains no Python logic to keep tidy.
+"src/model_gateway_control/api/dashboard.py" = ["E501"]
+
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "SIM", "RET", "ARG", "PTH", "RUF"]
 
