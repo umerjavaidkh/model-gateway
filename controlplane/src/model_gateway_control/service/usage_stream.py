@@ -15,6 +15,7 @@ from typing import Any
 
 from redis.asyncio import Redis
 from redis.exceptions import ResponseError
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from model_gateway_control.wire import usage_pb2 as pb
 
@@ -74,13 +75,24 @@ class UsageStream:
         Blocks rather than polling, so an idle consumer costs one connection
         instead of a query every interval.
         """
-        response = await self._client.xreadgroup(
-            groupname=self._group,
-            consumername=self._consumer,
-            streams={self._stream: ">"},
-            count=count,
-            block=block_ms,
-        )
+        try:
+            response = await self._client.xreadgroup(
+                groupname=self._group,
+                consumername=self._consumer,
+                streams={self._stream: ">"},
+                count=count,
+                block=block_ms,
+            )
+        except RedisTimeoutError:
+            # A blocking read that found nothing. redis-py raises rather than
+            # returning empty when the block window elapses, so treating this
+            # as an error would kill the consumer on its first idle window —
+            # and an accounting consumer is idle most of the time.
+            #
+            # Not caught in tests because a test always has events waiting.
+            # Found by running the consumer against a quiet Redis, which is
+            # what production looks like at four in the morning.
+            return Batch(ids=[], events=[])
         return self._decode(response)
 
     async def read_pending(self, *, count: int = 100) -> Batch:

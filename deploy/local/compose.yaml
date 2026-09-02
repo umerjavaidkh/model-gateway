@@ -1,0 +1,174 @@
+# A local fleet that runs the way production does.
+#
+# Every process is a Linux container, which is the point rather than a
+# convenience. Running these natively on macOS diverges from production in ways
+# that have already bitten this project twice: Docker Desktop cannot proxy a
+# Unix socket across a bind mount, and macOS caps socket paths at about 100
+# bytes. Inside containers, none of that applies — the sockets, the filesystem,
+# the user ids and the network are the ones the deployment will have.
+#
+#   make local-up      bring it up and seed it
+#   make local-smoke   prove it serves traffic
+#   make local-down    take it away, volumes and all
+#
+# What this still cannot mirror is named in deploy/local/README.md. Read it
+# before concluding that a green smoke test means production will be fine.
+
+name: model-gateway-local
+
+x-controlplane: &controlplane
+  image: gw-controlplane:local
+  build:
+    context: ../..
+    dockerfile: deploy/local/Dockerfile.controlplane
+  environment: &controlplane-env
+    GATEWAY_DATABASE_URL: postgresql+asyncpg://gateway:gateway@postgres:5432/gateway
+    GATEWAY_REDIS_URL: redis://redis:6379
+    # The same pepper the workers use. In production this comes from a secret
+    # manager; here it is in the file so that "it works locally" does not
+    # depend on remembering to export something.
+    GATEWAY_KEY_PEPPER: local-development-pepper-32-bytes!
+    GATEWAY_ADMIN_TOKEN: local-development-admin-token-32ch
+  depends_on:
+    postgres: {condition: service_healthy}
+    redis: {condition: service_healthy}
+
+x-worker: &worker
+  image: gw-dataplane:local
+  build:
+    context: ../..
+    dockerfile: deploy/local/Dockerfile.dataplane
+  environment: &worker-env
+    GATEWAY_LISTEN_ADDR: 0.0.0.0:8080
+    GATEWAY_CONTROL_PLANE_URL: http://admin:8081
+    GATEWAY_CONTROL_PLANE_TOKEN: local-development-admin-token-32ch
+    GATEWAY_KEY_PEPPER: local-development-pepper-32-bytes!
+    GATEWAY_REDIS_URL: redis://redis:6379
+    # Fleet-wide rate limits and the token vault both need this. Without it a
+    # worker enforces limits per replica, which is a legitimate deployment and
+    # not the one being mirrored here.
+    GATEWAY_SNAPSHOT_INTERVAL: 5s
+  depends_on:
+    admin: {condition: service_healthy}
+    redis: {condition: service_healthy}
+
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: gateway
+      POSTGRES_PASSWORD: gateway
+      POSTGRES_DB: gateway
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gateway"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    volumes: [pgdata:/var/lib/postgresql/data]
+
+  redis:
+    image: redis:7
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  # Migrations and seed, run once. Everything else waits for it, so a fresh
+  # `up` on an empty volume works rather than racing an empty schema.
+  migrate:
+    <<: *controlplane
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        alembic upgrade head
+        python /seed.py
+    volumes: ["./seed.py:/seed.py:ro"]
+    restart: "no"
+
+  admin:
+    <<: *controlplane
+    entrypoint: ["gateway-admin"]
+    environment:
+      <<: *controlplane-env
+      GATEWAY_ADMIN_HOST: 0.0.0.0
+      GATEWAY_ADMIN_PORT: "8081"
+    ports: ["18081:8081"]
+    healthcheck:
+      # A worker fails fast when it cannot reach the control plane, which is
+      # the right behaviour and means compose has to order them properly.
+      # "started" is not enough: the process exists well before it listens.
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/healthz')"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+
+  accounting:
+    <<: *controlplane
+    entrypoint: ["gateway-accounting"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+
+  finetune:
+    <<: *controlplane
+    entrypoint: ["gateway-finetune"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+
+  # Two workers, because one worker exercises none of what a fleet does:
+  # snapshot propagation, independent circuit breakers, limits shared through
+  # Redis rather than held in a process.
+  worker-a:
+    <<: *worker
+    environment:
+      <<: *worker-env
+      GATEWAY_REGION: local-a
+      GATEWAY_NER_SOCKET: /run/pii/ner.sock
+    ports: ["18080:8080"]
+    volumes: ["ner-a:/run/pii"]
+    depends_on:
+      admin: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      ner-a: {condition: service_started}
+
+  worker-b:
+    <<: *worker
+    environment:
+      <<: *worker-env
+      GATEWAY_REGION: local-b
+      GATEWAY_NER_SOCKET: /run/pii/ner.sock
+    ports: ["18090:8080"]
+    volumes: ["ner-b:/run/pii"]
+    depends_on:
+      admin: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      ner-b: {condition: service_started}
+
+  # One sidecar per worker, sharing only that worker's volume — which is the
+  # production shape. A single shared sidecar would work and would quietly
+  # stop being a per-pod boundary.
+  ner-a: &ner
+    image: gw-ner:local
+    build:
+      context: ../..
+      dockerfile: deploy/local/Dockerfile.ner
+    volumes: ["ner-a:/run/pii"]
+
+  ner-b:
+    <<: *ner
+    volumes: ["ner-b:/run/pii"]
+
+volumes:
+  pgdata:
+  ner-a:
+  ner-b:

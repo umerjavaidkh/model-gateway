@@ -1,0 +1,24 @@
+# The Go data plane, built the way it is deployed.
+#
+# Static and distroless, which is not decoration: the worker holds provider
+# credentials and unredacted payloads in memory, so an image with a shell is an
+# image where a container escape has somewhere convenient to go.
+FROM golang:1.26-alpine AS build
+
+WORKDIR /src
+# Dependencies first, so editing a source file does not re-download the module
+# graph on every build.
+COPY dataplane/go.mod dataplane/go.sum ./
+RUN go mod download
+
+COPY dataplane/ ./
+# CGO off because nothing needs it — wazero is pure Go — and leaving it on
+# would make the binary depend on the builder's libc rather than nothing.
+RUN CGO_ENABLED=0 go build -trimpath -o /out/gateway ./cmd/gateway \
+ && CGO_ENABLED=0 go build -trimpath -o /out/admissionrunner ./cmd/admissionrunner \
+ && CGO_ENABLED=0 go build -trimpath -o /out/snapshotgen ./cmd/snapshotgen
+
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=build /out/gateway /out/admissionrunner /out/snapshotgen /usr/local/bin/
+USER nonroot:nonroot
+ENTRYPOINT ["/usr/local/bin/gateway"]

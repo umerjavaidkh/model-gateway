@@ -111,6 +111,28 @@ proto: ## Regenerate Go code from proto/ (needs protoc and protoc-gen-go)
 		controlplane/src/model_gateway_control/wire/*_pb2.pyi
 	rm -f controlplane/src/model_gateway_control/wire/*.bak
 
+.PHONY: local-up
+local-up: ## Build and start the whole fleet in Linux containers, migrated and seeded
+	docker compose -f deploy/local/compose.yaml up -d --build
+	@echo
+	@echo "  worker A  localhost:18080     worker B  localhost:18090"
+	@echo "  admin     localhost:18081"
+	@echo "  key       gw_demo_local-development-key"
+	@echo
+	@echo "  make local-smoke   to prove it works"
+
+.PHONY: local-smoke
+local-smoke: ## Assert the local fleet behaves like a fleet
+	./deploy/local/smoke.sh
+
+.PHONY: local-logs
+local-logs: ## Follow every container
+	docker compose -f deploy/local/compose.yaml logs -f
+
+.PHONY: local-down
+local-down: ## Stop the local fleet and delete its volumes
+	docker compose -f deploy/local/compose.yaml down -v
+
 .PHONY: demo
 demo: ## Build a demo snapshot and run the gateway on :8080
 	@cd dataplane && go run ./cmd/snapshotgen -out ../snapshot.pb -pepper "$(DEMO_PEPPER)" -secret demo-secret
