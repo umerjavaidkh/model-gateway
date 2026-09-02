@@ -6,6 +6,11 @@ GO  := cd dataplane && go
 UV  := cd controlplane && uv
 NER := cd sidecars/pii-ner && uv
 
+# Where `make wasm-example` puts a built module. Modules are named by their
+# own digest, because that is how a manifest refers to one and how a worker
+# checks it got the bytes that were admitted.
+WASM_DIR := build/wasm
+
 # Demo only. A real deployment supplies this from a secret manager.
 DEMO_PEPPER := local-dev-pepper-not-for-production!!
 
@@ -61,6 +66,15 @@ livecheck: ## Prove configuration reaches a running worker, and survives a contr
 .PHONY: admissioncheck
 admissioncheck: ## Prove a component cannot be bound until the runner vouches for it
 	./scripts/admission-check.sh
+
+.PHONY: wasm-example
+wasm-example: ## Build the example WASM guardrail into $(WASM_DIR), named by digest
+	@mkdir -p "$(WASM_DIR)"
+	@cd examples/wasm-guardrail && GOOS=wasip1 GOARCH=wasm \
+		go build -buildmode=c-shared -o "$(CURDIR)/$(WASM_DIR)/module.wasm" .
+	@digest=$$(shasum -a 256 "$(WASM_DIR)/module.wasm" | cut -d' ' -f1); \
+		mv "$(WASM_DIR)/module.wasm" "$(WASM_DIR)/$$digest.wasm"; \
+		echo "sha256:$$digest"
 
 .PHONY: nercheck
 nercheck: ## Prove the Go client and the Python sidecar agree about byte offsets

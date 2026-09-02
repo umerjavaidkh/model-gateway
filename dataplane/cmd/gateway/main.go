@@ -28,6 +28,7 @@ import (
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/adapters/rediskv"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/adapters/redisstream"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/adapters/secretscan"
+	"github.com/umerjavaidkh/model-gateway/dataplane/internal/adapters/wasmguardrail"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/config"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/core"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/gateway"
@@ -40,6 +41,7 @@ import (
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/snapshot"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/telemetry"
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/tracing"
+	"github.com/umerjavaidkh/model-gateway/dataplane/internal/wasm"
 )
 
 // version identifies this build in traces. Set with -ldflags at release time.
@@ -95,13 +97,48 @@ func run(logger *slog.Logger) error {
 			slog.Float64("sample_ratio", cfg.TraceSampleRatio))
 	}
 
+	// In-process components, if this worker is configured to run any. The
+	// runtime is held for the worker's life because compiling a module costs
+	// hundreds of milliseconds and a compiled one is reusable.
+	var wasmRegistry *wasmguardrail.Registry
+	if cfg.WASMDir != "" {
+		runtime, err := wasm.NewRuntime(ctx, wasm.Limits{})
+		if err != nil {
+			return err
+		}
+		defer func() { _ = runtime.Close(context.WithoutCancel(ctx)) }()
+
+		store, err := wasm.NewModuleStore(cfg.WASMDir)
+		if err != nil {
+			return err
+		}
+		wasmRegistry, err = wasmguardrail.NewRegistry(runtime, store, logger)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = wasmRegistry.Close(context.WithoutCancel(ctx)) }()
+		logger.Info("in-process components enabled", slog.String("modules", cfg.WASMDir))
+	}
+
 	initial, err := bootstrap(ctx, cfg, logger)
 	if err != nil {
 		return err
 	}
-	holder, err := snapshot.New(initial, snapshot.OnRetire(func(s *core.Snapshot) {
-		logger.Info("snapshot retired", slog.Uint64("version", s.GlobalVersion().Number))
-	}))
+	// Loaded before the snapshot serves anything, so no request can arrive to
+	// find a binding whose component is not there yet.
+	if wasmRegistry != nil {
+		wasmRegistry.Sync(ctx, initial.AllGuardrails())
+	}
+
+	holder, err := snapshot.New(initial,
+		snapshot.OnApply(func(s *core.Snapshot) {
+			if wasmRegistry != nil {
+				wasmRegistry.Sync(ctx, s.AllGuardrails())
+			}
+		}),
+		snapshot.OnRetire(func(s *core.Snapshot) {
+			logger.Info("snapshot retired", slog.Uint64("version", s.GlobalVersion().Number))
+		}))
 	if err != nil {
 		return err
 	}
@@ -195,8 +232,15 @@ func run(logger *slog.Logger) error {
 		}
 	}()
 
-	guardrailRegistry, err := guardrails.NewStaticRegistry(
+	builtins, err := guardrails.NewStaticRegistry(
 		secretscan.New(), injectionheuristics.New())
+	if err != nil {
+		return err
+	}
+	// Built-ins first: a published component sharing a name with one of ours
+	// cannot displace it. The alternative is a registry entry silently
+	// overriding a guardrail an operator believes is running.
+	guardrailRegistry, err := guardrails.NewCompositeRegistry(builtins, wasmRegistryOrNil(wasmRegistry))
 	if err != nil {
 		return err
 	}
@@ -342,6 +386,18 @@ func run(logger *slog.Logger) error {
 // Without a file, the control plane is the only source and the worker cannot
 // start until it answers. That is a real constraint and it is better stated
 // than papered over.
+// wasmRegistryOrNil keeps a typed nil out of the interface.
+//
+// A *Registry that is nil satisfies guardrails.Registry, and a composite
+// holding it would call through and panic. The check has to happen where the
+// concrete type is still visible, which is here.
+func wasmRegistryOrNil(r *wasmguardrail.Registry) guardrails.Registry {
+	if r == nil {
+		return nil
+	}
+	return r
+}
+
 func bootstrap(ctx context.Context, cfg config.Config, logger *slog.Logger) (*core.Snapshot, error) {
 	source, err := bootstrapSource(cfg)
 	if err != nil {

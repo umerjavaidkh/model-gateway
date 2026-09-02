@@ -324,6 +324,7 @@ def to_manifest(row: models.Component) -> Manifest:
         execution=Execution(row.execution),
         capabilities=tuple(sorted(c.name for c in row.capabilities)),
         image=row.image,
+        module=row.module,
     )
 
 

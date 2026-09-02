@@ -35,9 +35,22 @@ fi
 
 WORK="$(mktemp -d /tmp/admcheck.XXXXXX)"
 ADMIN_PID=""
+# stop waits for a process to actually exit after asking it to.
+#
+# Without the wait, the rm below can race a process that has been signalled but
+# not yet reaped, and removing a directory holding its running executable fails
+# with a permission error. That turns a passing check into a failing one after
+# it has already printed that it passed, which is the worst way for a check to
+# be flaky.
+stop() {
+  [ -n "${1:-}" ] || return 0
+  kill "$1" 2>/dev/null || return 0
+  wait "$1" 2>/dev/null || true
+}
+
 cleanup() {
-  [ -n "$ADMIN_PID" ] && kill "$ADMIN_PID" 2>/dev/null || true
-  rm -rf "$WORK"
+  stop "$ADMIN_PID"
+  rm -rf "$WORK" 2>/dev/null || echo "could not remove $WORK" >&2
 }
 trap cleanup EXIT
 
@@ -175,6 +188,13 @@ register() {
     -d "{\"name\":\"$1\",\"version\":\"1.0.0\",\"port\":\"guardrail\",
          \"latency_budget_ms\":50,\"execution\":\"sidecar\",\"image\":\"$2\"}"
 }
+register_wasm() {
+  admin -o /dev/null -w '%{http_code}' -X POST \
+    "http://127.0.0.1:$ADMIN_PORT/v1/components" \
+    -H 'Content-Type: application/json' \
+    -d "{\"name\":\"$1\",\"version\":\"1.0.0\",\"port\":\"guardrail\",
+         \"latency_budget_ms\":2000,\"execution\":\"in_process\",\"module\":\"$2\"}"
+}
 status_of() {
   admin "http://127.0.0.1:$ADMIN_PORT/v1/components/$1/1.0.0" \
     | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])'
@@ -232,6 +252,54 @@ check "the runner reported a failure, not an error" 2 "$runner_exit"
 check "the component stays pending" pending "$(status_of deny-everything)"
 check "the report names the case it failed" 1 \
   "$(grep -c 'allows a benign payload unchanged' "$WORK/deny-everything-1.0.0.txt")"
+
+echo "==> an in-process component is admitted without any container at all"
+# The WASM runtime is the sandbox: a module has no ambient authority, so there
+# is nothing here for a container to add. This path runs on a host with no
+# container runtime installed, which is most of the point of the mode.
+mkdir -p "$WORK/modules"
+(cd "$ROOT/examples/wasm-guardrail" && GOOS=wasip1 GOARCH=wasm \
+  go build -buildmode=c-shared -o "$WORK/modules/module.wasm" .)
+wasm_digest="$(shasum -a 256 "$WORK/modules/module.wasm" | cut -d' ' -f1)"
+mv "$WORK/modules/module.wasm" "$WORK/modules/$wasm_digest.wasm"
+
+check "registration accepted" 201 "$(register_wasm wasm-guard "sha256:$wasm_digest")"
+check "registered but pending" pending "$(status_of wasm-guard)"
+
+STUB_BEHAVIOUR=conforming "$WORK/admissionrunner" \
+  -control-plane "http://127.0.0.1:$ADMIN_PORT" \
+  -token "$ADMIN_TOKEN" \
+  -component wasm-guard -version 1.0.0 \
+  -fixtures "$WORK/fixtures.json" \
+  -module-dir "$WORK/modules" \
+  -report-dir "$WORK" \
+  -evidence "file://$WORK/wasm-guard-1.0.0.txt" \
+  >"$WORK/wasm-guard.out" 2>&1 && runner_exit=0 || runner_exit=$?
+
+check "the runner reported a pass" 0 "$runner_exit"
+check "the component is now active" active "$(status_of wasm-guard)"
+check "the suite that gates a sidecar gated this too" 1 \
+  "$(grep -c 'allows a benign payload unchanged' "$WORK/wasm-guard-1.0.0.txt")"
+
+echo "==> the module a worker runs is verified against the manifest"
+# An admission record vouches for specific bytes. A worker that compiles
+# whatever is at the expected path runs whatever an attacker with write access
+# to the volume put there.
+printf '\0' >>"$WORK/modules/$wasm_digest.wasm"
+STUB_BEHAVIOUR=conforming "$WORK/admissionrunner" \
+  -control-plane "http://127.0.0.1:$ADMIN_PORT" \
+  -token "$ADMIN_TOKEN" \
+  -component wasm-guard -version 1.0.0 \
+  -fixtures "$WORK/fixtures.json" \
+  -module-dir "$WORK/modules" \
+  -report-dir "$WORK" \
+  >"$WORK/wasm-swapped.out" 2>&1 && swapped_exit=0 || swapped_exit=$?
+
+# Exit 1, not 2: the bytes are not the admitted ones, so this is a run that
+# could not happen rather than a component that failed.
+check "a swapped module is refused" 1 "$swapped_exit"
+check "and it says why" 1 \
+  "$(grep -c 'not the admitted' "$WORK/wasm-swapped.out")"
 
 if [ "$fail" -ne 0 ]; then
   echo "admission check failed" >&2

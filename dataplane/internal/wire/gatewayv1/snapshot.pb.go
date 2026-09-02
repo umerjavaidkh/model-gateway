@@ -928,7 +928,17 @@ type GuardrailBinding struct {
 	// traffic.
 	Blocking bool `protobuf:"varint,6,opt,name=blocking,proto3" json:"blocking,omitempty"`
 	// phases the guardrail inspects. Empty means the request leg only.
-	Phases        []string `protobuf:"bytes,7,rep,name=phases,proto3" json:"phases,omitempty"`
+	Phases []string `protobuf:"bytes,7,rep,name=phases,proto3" json:"phases,omitempty"`
+	// execution is how the worker must run this component: "builtin" for one
+	// compiled in, "sidecar" for a process on a socket, "in_process" for a WASM
+	// module. Carried here because the snapshot is the worker's only source of
+	// configuration — a worker that had to ask something else how to run a
+	// bound component would stop serving when that something else was down.
+	Execution string `protobuf:"bytes,8,opt,name=execution,proto3" json:"execution,omitempty"`
+	// module is the sha256 digest of the WASM module, for in_process
+	// components. The worker verifies the bytes against it before compiling:
+	// the admission record vouches for these bytes and no others.
+	Module        string `protobuf:"bytes,9,opt,name=module,proto3" json:"module,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1010,6 +1020,20 @@ func (x *GuardrailBinding) GetPhases() []string {
 		return x.Phases
 	}
 	return nil
+}
+
+func (x *GuardrailBinding) GetExecution() string {
+	if x != nil {
+		return x.Execution
+	}
+	return ""
+}
+
+func (x *GuardrailBinding) GetModule() string {
+	if x != nil {
+		return x.Module
+	}
+	return ""
 }
 
 type PluginBinding struct {
@@ -1888,7 +1912,7 @@ const file_gateway_v1_snapshot_proto_rawDesc = "" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\x04R\aversion\x12,\n" +
 	"\x05rules\x18\x03 \x03(\v2\x16.gateway.v1.PolicyRuleR\x05rules\x12?\n" +
-	"\x0edefault_effect\x18\x04 \x01(\x0e2\x18.gateway.v1.PolicyEffectR\rdefaultEffect\"\xf8\x01\n" +
+	"\x0edefault_effect\x18\x04 \x01(\x0e2\x18.gateway.v1.PolicyEffectR\rdefaultEffect\"\xae\x02\n" +
 	"\x10GuardrailBinding\x12\x1c\n" +
 	"\tcomponent\x18\x01 \x01(\tR\tcomponent\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12\x1d\n" +
@@ -1898,7 +1922,9 @@ const file_gateway_v1_snapshot_proto_rawDesc = "" +
 	"timeout_ms\x18\x04 \x01(\rR\ttimeoutMs\x12:\n" +
 	"\ffailure_mode\x18\x05 \x01(\x0e2\x17.gateway.v1.FailureModeR\vfailureMode\x12\x1a\n" +
 	"\bblocking\x18\x06 \x01(\bR\bblocking\x12\x16\n" +
-	"\x06phases\x18\a \x03(\tR\x06phases\"\x8c\x01\n" +
+	"\x06phases\x18\a \x03(\tR\x06phases\x12\x1c\n" +
+	"\texecution\x18\b \x01(\tR\texecution\x12\x16\n" +
+	"\x06module\x18\t \x01(\tR\x06module\"\x8c\x01\n" +
 	"\rPluginBinding\x12$\n" +
 	"\x04port\x18\x01 \x01(\x0e2\x10.gateway.v1.PortR\x04port\x12\x1c\n" +
 	"\tcomponent\x18\x02 \x01(\tR\tcomponent\x12\x18\n" +

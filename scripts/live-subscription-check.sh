@@ -23,11 +23,26 @@ WORK="$(mktemp -d)"
 ADMIN_PID=""
 WORKER_PID=""
 ACCOUNTING_PID=""
+# stop waits for a process to actually exit after asking it to.
+#
+# Without the wait, the rm below can race a process that has been signalled but
+# not yet reaped, and removing a directory holding its running executable fails
+# with a permission error. That turns a passing check into a failing one after
+# it has already printed that it passed, which is the worst way for a check to
+# be flaky.
+stop() {
+  [ -n "${1:-}" ] || return 0
+  kill "$1" 2>/dev/null || return 0
+  wait "$1" 2>/dev/null || true
+}
+
 cleanup() {
-  [ -n "$ACCOUNTING_PID" ] && kill "$ACCOUNTING_PID" 2>/dev/null || true
-  [ -n "$WORKER_PID" ] && kill "$WORKER_PID" 2>/dev/null || true
-  [ -n "$ADMIN_PID" ] && kill "$ADMIN_PID" 2>/dev/null || true
-  rm -rf "$WORK"
+  stop "$ACCOUNTING_PID"
+  stop "$WORKER_PID"
+  stop "$ADMIN_PID"
+  # Best effort: a directory that cannot be removed is a warning, not a reason
+  # to fail a check that has already run.
+  rm -rf "$WORK" 2>/dev/null || echo "could not remove $WORK" >&2
 }
 trap cleanup EXIT
 

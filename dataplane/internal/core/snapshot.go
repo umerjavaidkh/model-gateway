@@ -533,6 +533,24 @@ func (s *Snapshot) Guardrails(tenant TenantID, phase Phase) []GuardrailBinding {
 	return applicable
 }
 
+// AllGuardrails returns every guardrail binding in the snapshot: the fleet
+// defaults and every tenant's, both phases.
+//
+// For whatever has to prepare a component before a request reaches it. That
+// cannot ask per tenant and per phase, because the first request to need a
+// component is the one that would pay for loading it.
+//
+// The bindings alias snapshot memory; callers may read them and must not write
+// to them.
+func (s *Snapshot) AllGuardrails() []GuardrailBinding {
+	all := make([]GuardrailBinding, 0, len(s.global.guardrails))
+	all = append(all, s.global.guardrails...)
+	for _, layer := range s.tenants {
+		all = append(all, layer.guardrails...)
+	}
+	return all
+}
+
 // Policy returns the compiled policy bundle that applies to a tenant, as the
 // bytes the policy package decodes.
 //

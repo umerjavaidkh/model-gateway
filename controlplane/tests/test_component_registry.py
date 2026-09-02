@@ -104,11 +104,44 @@ def test_the_digest_covers_every_field_and_is_order_independent() -> None:
         {"version": "2.1.1"},
         {"latency_budget_ms": 51},
         {"failure_mode": FailureMode.OPEN},
-        {"execution": Execution.IN_PROCESS},
+        # An in-process component must name its module, so this changes two
+        # fields at once — which is the point: both are covered by the digest.
+        {"execution": Execution.IN_PROCESS, "image": "", "module": "sha256:" + "c" * 64},
         {"config_schema": '{"type":"object"}'},
         {"capabilities": ("streaming",)},
     ):
         assert base.digest() != manifest(**({"capabilities": base.capabilities} | change)).digest()
+
+
+def test_an_in_process_component_must_name_the_module_a_worker_will_run() -> None:
+    # There is no registry to pin against here — the artifact is a file — so
+    # the digest is over the bytes, and a worker verifies it before compiling
+    # anything. Without it the admission record vouches for one module and the
+    # worker runs whatever is on disk.
+    with pytest.raises(InvalidRequestError, match="module digest"):
+        manifest(execution=Execution.IN_PROCESS, image="")
+
+    with pytest.raises(InvalidRequestError, match="not a sha256 digest"):
+        manifest(execution=Execution.IN_PROCESS, image="", module="v1.2.3")
+
+    pinned = manifest(execution=Execution.IN_PROCESS, image="", module="sha256:" + "a" * 64)
+    assert pinned.module.endswith("a" * 64)
+
+
+def test_a_module_on_a_component_that_does_not_run_in_process_is_rejected() -> None:
+    # It would be silently ignored, and the publisher would believe their WASM
+    # module was what ran.
+    with pytest.raises(InvalidRequestError, match="does not run in process"):
+        manifest(execution=Execution.SIDECAR, module="sha256:" + "a" * 64)
+
+
+def test_the_digest_covers_the_module_reference() -> None:
+    # Two builds of a component differing only in their module must not share
+    # an admission record.
+    first = manifest(execution=Execution.IN_PROCESS, image="", module="sha256:" + "a" * 64)
+    second = manifest(execution=Execution.IN_PROCESS, image="", module="sha256:" + "b" * 64)
+
+    assert first.digest() != second.digest()
 
 
 def test_an_unknown_manifest_field_is_an_error_rather_than_a_default() -> None:

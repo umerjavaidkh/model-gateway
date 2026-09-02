@@ -228,7 +228,16 @@ type GuardrailBinding struct {
 	Component string
 	Version   string
 	ConfigRef string
-	Budget    GuardrailBudget
+	// Execution is how a worker must run this component: compiled in, on a
+	// socket, or as a WASM module. Carried in the snapshot because that is the
+	// worker's only source of configuration; one that had to ask something
+	// else how to run a bound component would stop serving when that something
+	// else was down.
+	Execution string
+	// Module is the sha256 digest of the WASM module, for in-process
+	// components. A worker verifies the bytes against it before compiling.
+	Module string
+	Budget GuardrailBudget
 }
 
 // Inspects reports whether this binding runs on the given leg.

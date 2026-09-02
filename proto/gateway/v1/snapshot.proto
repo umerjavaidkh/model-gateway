@@ -203,6 +203,16 @@ message GuardrailBinding {
   bool blocking = 6;
   // phases the guardrail inspects. Empty means the request leg only.
   repeated string phases = 7;
+  // execution is how the worker must run this component: "builtin" for one
+  // compiled in, "sidecar" for a process on a socket, "in_process" for a WASM
+  // module. Carried here because the snapshot is the worker's only source of
+  // configuration — a worker that had to ask something else how to run a
+  // bound component would stop serving when that something else was down.
+  string execution = 8;
+  // module is the sha256 digest of the WASM module, for in_process
+  // components. The worker verifies the bytes against it before compiling:
+  // the admission record vouches for these bytes and no others.
+  string module = 9;
 }
 
 message PluginBinding {

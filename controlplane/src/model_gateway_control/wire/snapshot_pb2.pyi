@@ -168,7 +168,7 @@ class PolicyBundle(_message.Message):
     def __init__(self, id: _Optional[str] = ..., version: _Optional[int] = ..., rules: _Optional[_Iterable[_Union[PolicyRule, _Mapping]]] = ..., default_effect: _Optional[_Union[PolicyEffect, str]] = ...) -> None: ...
 
 class GuardrailBinding(_message.Message):
-    __slots__ = ("component", "version", "config_ref", "timeout_ms", "failure_mode", "blocking", "phases")
+    __slots__ = ("component", "version", "config_ref", "timeout_ms", "failure_mode", "blocking", "phases", "execution", "module")
     COMPONENT_FIELD_NUMBER: _ClassVar[int]
     VERSION_FIELD_NUMBER: _ClassVar[int]
     CONFIG_REF_FIELD_NUMBER: _ClassVar[int]
@@ -176,6 +176,8 @@ class GuardrailBinding(_message.Message):
     FAILURE_MODE_FIELD_NUMBER: _ClassVar[int]
     BLOCKING_FIELD_NUMBER: _ClassVar[int]
     PHASES_FIELD_NUMBER: _ClassVar[int]
+    EXECUTION_FIELD_NUMBER: _ClassVar[int]
+    MODULE_FIELD_NUMBER: _ClassVar[int]
     component: str
     version: str
     config_ref: str
@@ -183,7 +185,9 @@ class GuardrailBinding(_message.Message):
     failure_mode: FailureMode
     blocking: bool
     phases: _containers.RepeatedScalarFieldContainer[str]
-    def __init__(self, component: _Optional[str] = ..., version: _Optional[str] = ..., config_ref: _Optional[str] = ..., timeout_ms: _Optional[int] = ..., failure_mode: _Optional[_Union[FailureMode, str]] = ..., blocking: bool = ..., phases: _Optional[_Iterable[str]] = ...) -> None: ...
+    execution: str
+    module: str
+    def __init__(self, component: _Optional[str] = ..., version: _Optional[str] = ..., config_ref: _Optional[str] = ..., timeout_ms: _Optional[int] = ..., failure_mode: _Optional[_Union[FailureMode, str]] = ..., blocking: bool = ..., phases: _Optional[_Iterable[str]] = ..., execution: _Optional[str] = ..., module: _Optional[str] = ...) -> None: ...
 
 class PluginBinding(_message.Message):
     __slots__ = ("port", "component", "version", "config_ref")

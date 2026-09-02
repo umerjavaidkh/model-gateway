@@ -425,6 +425,8 @@ class Component(Base, TimestampMixin):
     failure_mode: Mapped[str] = mapped_column(String(16), nullable=False, default="closed")
     execution: Mapped[str] = mapped_column(String(16), nullable=False, default="sidecar")
     image: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    #: sha256:<64 hex> of the WASM module, for in-process components.
+    module: Mapped[str] = mapped_column(String(128), nullable=False, default="")
 
     capabilities: Mapped[list[ComponentCapability]] = relationship(
         back_populates="component", cascade="all, delete-orphan", lazy="selectin"

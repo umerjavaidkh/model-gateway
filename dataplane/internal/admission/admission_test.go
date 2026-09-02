@@ -80,7 +80,7 @@ func component() http.Handler {
 func runner(t *testing.T, box sandbox.Runner) *admission.Runner {
 	t.Helper()
 
-	r, err := admission.NewRunner("sandbox://test", box)
+	r, err := admission.NewRunner("sandbox://test", admission.WithSandbox(box))
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
@@ -195,8 +195,17 @@ func TestABenignFixtureIsRequired(t *testing.T) {
 
 func TestARunnerMustBeNamed(t *testing.T) {
 	// An auditor has to be able to tell one sandbox host from the control plane.
-	if _, err := admission.NewRunner("", fakeSandbox{}); err == nil {
+	if _, err := admission.NewRunner("", admission.WithSandbox(fakeSandbox{})); err == nil {
 		t.Fatal("an anonymous runner was accepted")
+	}
+}
+
+func TestARunnerWithNoWayToRunAnythingIsRefused(t *testing.T) {
+	// Refused at construction rather than on its first component: a runner
+	// that can admit nothing is a deployment mistake, and it should surface
+	// where the mistake was made.
+	if _, err := admission.NewRunner("sandbox://test"); err == nil {
+		t.Fatal("a runner with neither a sandbox nor a module store was accepted")
 	}
 }
 

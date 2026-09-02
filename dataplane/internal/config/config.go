@@ -80,6 +80,13 @@ type Config struct {
 	// optional rather than required.
 	NERSocket string
 
+	// WASMDir holds the WASM modules of in-process components, named by their
+	// sha256 digest. How they get there is a deployment concern — an init
+	// container, a volume, a sync sidecar — and what this worker guarantees is
+	// that it verifies the bytes against the digest a snapshot binds before
+	// compiling anything.
+	WASMDir string
+
 	ReadTimeout   time.Duration
 	WriteTimeout  time.Duration
 	IdleTimeout   time.Duration
@@ -103,6 +110,7 @@ func Load(getenv Getenv) (Config, error) {
 		RedisURL:          getenv("GATEWAY_REDIS_URL"),
 		Region:            getenv("GATEWAY_REGION"),
 		NERSocket:         getenv("GATEWAY_NER_SOCKET"),
+		WASMDir:           getenv("GATEWAY_WASM_DIR"),
 		OTLPInsecure:      getenv("GATEWAY_OTLP_INSECURE") == "true",
 		TraceSampleRatio:  DefaultTraceSampleRatio,
 		ReadTimeout:       DefaultReadTimeout,
@@ -166,9 +174,9 @@ func firstNonEmpty(values ...string) string {
 func (c Config) String() string {
 	return fmt.Sprintf(
 		"listen=%s snapshot=%s control_plane=%s interval=%s otlp=%s sample=%v redis=%v "+
-			"ner_socket=%s pepper=<%d bytes redacted> "+
+			"ner_socket=%s wasm_dir=%s pepper=<%d bytes redacted> "+
 			"control_plane_token=<%d chars redacted>",
 		c.ListenAddr, c.SnapshotFile, c.ControlPlaneURL, c.SnapshotInterval,
 		c.OTLPEndpoint, c.TraceSampleRatio, c.RedisURL != "",
-		c.NERSocket, len(c.KeyPepper), len(c.ControlPlaneToken))
+		c.NERSocket, c.WASMDir, len(c.KeyPepper), len(c.ControlPlaneToken))
 }
