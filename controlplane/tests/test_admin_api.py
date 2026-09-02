@@ -847,3 +847,128 @@ async def test_steps_that_go_backwards_are_refused(training_client: AsyncClient)
 
     assert response.status_code == 400
     assert "ascend" in response.text
+
+
+# --- provisioning -----------------------------------------------------------
+
+
+def _deployment_body(**overrides: object) -> dict[str, object]:
+    body: dict[str, object] = {
+        "base_model": "qwen2.5:0.5b",
+        "provider": "openai-compatible",
+        "endpoint": "http://ollama:11434/v1",
+        "trust_tier": 3,
+        "input_cost_micro_usd": 100,
+        "output_cost_micro_usd": 200,
+    }
+    body.update(overrides)
+    return body
+
+
+async def test_a_deployment_needs_only_what_the_caller_actually_knows(
+    client: AsyncClient,
+) -> None:
+    # The table has thirteen NOT NULL columns and no defaults. Making a caller
+    # supply all of them is how a deployment ends up with a cost of zero that
+    # nobody notices until the invoice — and it is what made registering a
+    # model three failed INSERTs before this existed.
+    response = await client.put("/v1/deployments/qwen-1", json=_deployment_body())
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["base_model"] == "qwen2.5:0.5b"
+    # Serving by default: weight zero is where a canary starts, not where a
+    # model an operator just added should sit silently doing nothing.
+    assert body["weight"] == 100
+    assert body["adapter_id"] == ""
+
+
+async def test_putting_a_deployment_twice_updates_rather_than_duplicates(
+    client: AsyncClient,
+) -> None:
+    # A deploy script restating its position must not create a second
+    # deployment, and a retry after a crash must be free.
+    await client.put("/v1/deployments/qwen-1", json=_deployment_body())
+    await client.put(
+        "/v1/deployments/qwen-1", json=_deployment_body(endpoint="http://elsewhere:8000/v1")
+    )
+
+    listed = (await client.get("/v1/deployments")).json()["deployments"]
+
+    assert len([d for d in listed if d["id"] == "qwen-1"]) == 1
+    assert listed[0]["endpoint"] == "http://elsewhere:8000/v1"
+
+
+async def test_a_deployment_without_a_trust_tier_is_refused(client: AsyncClient) -> None:
+    # An unset tier is filtered out of every candidate list, so the deployment
+    # would exist and never serve — which looks like a routing bug.
+    response = await client.put("/v1/deployments/qwen-1", json=_deployment_body(trust_tier=0))
+
+    assert response.status_code == 400
+    assert "trust tier" in response.text
+
+
+async def test_a_deployment_can_be_removed(client: AsyncClient) -> None:
+    await client.put("/v1/deployments/qwen-1", json=_deployment_body())
+
+    assert (await client.delete("/v1/deployments/qwen-1")).status_code == 204
+    assert (await client.get("/v1/deployments")).json()["deployments"] == []
+    assert (await client.delete("/v1/deployments/qwen-1")).status_code == 404
+
+
+async def test_a_tenant_arrives_with_somewhere_to_hang_a_key(client: AsyncClient) -> None:
+    # A tenant with no application cannot own a key. Making that a separate
+    # call only means everyone makes both, and whoever forgets gets a foreign
+    # key error rather than an explanation.
+    created = await client.put("/v1/tenants/acme", json={"tier": "enterprise"})
+    assert created.status_code == 200, created.text
+
+    issued = await client.post(
+        "/v1/tenants/acme/keys", json={"key_id": "ada", "application_id": "acme-app"}
+    )
+    assert issued.status_code == 201, issued.text
+    # The only time the secret exists outside the holder's hands.
+    assert issued.json()["presented"].startswith("gw_acme_")
+
+
+async def test_putting_a_tenant_twice_does_not_make_a_second_one(
+    client: AsyncClient,
+) -> None:
+    first = await client.put("/v1/tenants/acme", json={"tier": "standard"})
+    second = await client.put("/v1/tenants/acme", json={"tier": "enterprise"})
+
+    assert first.json()["id"] == second.json()["id"] == "acme"
+    assert second.json()["tier"] == "enterprise"
+    # The layer version moves, because workers refuse one that went backwards
+    # and a configuration change has to reach them.
+    assert second.json()["version"] > first.json()["version"]
+
+
+async def test_a_budget_can_be_raised_without_forgetting_what_was_spent(
+    client: AsyncClient,
+) -> None:
+    # Spend is a fact the accounting consumer owns. Letting provisioning zero
+    # it would make the arithmetic disagree with the invoice, silently and in
+    # the flattering direction.
+    await client.put("/v1/tenants/acme", json={})
+    await client.put("/v1/budgets/monthly", json={"tenant": "acme", "limit_micro_usd": 1_000_000})
+    raised = await client.put(
+        "/v1/budgets/monthly", json={"tenant": "acme", "limit_micro_usd": 5_000_000}
+    )
+
+    assert raised.status_code == 200
+    assert raised.json()["limit_micro_usd"] == 5_000_000
+    assert raised.json()["spent_micro_usd"] == 0
+
+
+async def test_an_alias_points_at_models_in_order(client: AsyncClient) -> None:
+    response = await client.put(
+        "/v1/aliases/fast", json={"targets": ["qwen2.5:0.5b", "gpt-4o-mini"]}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["targets"] == ["qwen2.5:0.5b", "gpt-4o-mini"]
+
+
+async def test_an_alias_with_no_targets_is_refused(client: AsyncClient) -> None:
+    assert (await client.put("/v1/aliases/fast", json={"targets": []})).status_code == 422

@@ -23,7 +23,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from model_gateway_control.api import idempotency
 from model_gateway_control.db.repository import Repository
 from model_gateway_control.db.session import session_factory
-from model_gateway_control.domain.catalog import TrustTier
+from model_gateway_control.domain.budget import BudgetScope
+from model_gateway_control.domain.catalog import Capability, TrustTier
 from model_gateway_control.domain.component import (
     Admission,
     Component,
@@ -52,6 +53,7 @@ from model_gateway_control.errors import (
 from model_gateway_control.service.finetune import Evaluators, FineTuneService, Trainers
 from model_gateway_control.service.keys import KeyService
 from model_gateway_control.service.policy import PolicyService
+from model_gateway_control.service.provisioning import DeploymentSpec, ProvisioningService
 from model_gateway_control.service.registry import RegistryService
 from model_gateway_control.snapshot import build_snapshot
 
@@ -419,6 +421,78 @@ def create_app(settings: AdminSettings) -> FastAPI:
         await session.commit()
         return _json_response(status.HTTP_200_OK, _job_json(job))
 
+    # --- provisioning -----------------------------------------------------
+    #
+    # PUT rather than POST for everything but a key: the caller states the
+    # configuration it wants and the gateway makes it so, whether or not it
+    # already existed. A deploy script or a compliance engine restating its
+    # position should not have to work out what it said last time, and a retry
+    # after a crash must not be a second tenant.
+
+    @app.put("/v1/tenants/{tenant}", dependencies=[Authorized])
+    async def put_tenant(tenant: str, body: PutTenantRequest, session: Session) -> Response:
+        row = await ProvisioningService(session).ensure_tenant(
+            tenant, tier=body.tier, min_trust_tier=body.min_trust_tier
+        )
+        await session.commit()
+        return _json_response(
+            status.HTTP_200_OK,
+            {"id": row.id, "tier": row.tier, "version": row.version, "key_prefix": row.id},
+        )
+
+    @app.put("/v1/deployments/{deployment_id}", dependencies=[Authorized])
+    async def put_deployment(
+        deployment_id: str, body: PutDeploymentRequest, session: Session
+    ) -> Response:
+        row = await ProvisioningService(session).ensure_deployment(body.to_spec(deployment_id))
+        await session.commit()
+        return _json_response(status.HTTP_200_OK, _deployment_json(row))
+
+    @app.get("/v1/deployments", dependencies=[Authorized])
+    async def list_deployments(session: Session) -> Response:
+        rows = await ProvisioningService(session).list_deployments()
+        return _json_response(
+            status.HTTP_200_OK, {"deployments": [_deployment_json(r) for r in rows]}
+        )
+
+    @app.delete(
+        "/v1/deployments/{deployment_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        dependencies=[Authorized],
+    )
+    async def delete_deployment(deployment_id: str, session: Session) -> Response:
+        await ProvisioningService(session).remove_deployment(deployment_id)
+        await session.commit()
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @app.put("/v1/aliases/{name}", dependencies=[Authorized])
+    async def put_alias(name: str, body: PutAliasRequest, session: Session) -> Response:
+        await ProvisioningService(session).ensure_alias(name, body.targets)
+        await session.commit()
+        return _json_response(status.HTTP_200_OK, {"name": name, "targets": body.targets})
+
+    @app.put("/v1/budgets/{budget_id}", dependencies=[Authorized])
+    async def put_budget(budget_id: str, body: PutBudgetRequest, session: Session) -> Response:
+        row = await ProvisioningService(session).ensure_budget(
+            budget_id,
+            tenant_id=body.tenant,
+            limit_micro_usd=body.limit_micro_usd,
+            scope=body.scope,
+            hard=body.hard,
+            headroom_basis_points=body.headroom_basis_points,
+        )
+        await session.commit()
+        return _json_response(
+            status.HTTP_200_OK,
+            {
+                "id": row.id,
+                "tenant": row.tenant_id,
+                "limit_micro_usd": row.limit_micro_usd,
+                "spent_micro_usd": row.spent_micro_usd,
+                "hard": row.hard,
+            },
+        )
+
     # --- policy -----------------------------------------------------------
     #
     # The gateway evaluates policy; it does not decide what it should be. This
@@ -539,6 +613,65 @@ def create_app(settings: AdminSettings) -> FastAPI:
     return app
 
 
+class PutTenantRequest(BaseModel):
+    """A tenant, and the hierarchy a key hangs off."""
+
+    tier: str = "standard"
+    min_trust_tier: TrustTier = TrustTier.EXTERNAL
+
+
+class PutDeploymentRequest(BaseModel):
+    """Somewhere a model can be served from."""
+
+    base_model: str = Field(min_length=1, max_length=255)
+    provider: str = Field(min_length=1, max_length=64)
+    endpoint: str = Field(min_length=1, max_length=1024)
+    trust_tier: TrustTier
+    adapter_id: str = ""
+    region: str = ""
+    credential_ref: str = ""
+    weight: int = Field(default=100, ge=0, le=100)
+    input_cost_micro_usd: int = Field(default=0, ge=0)
+    output_cost_micro_usd: int = Field(default=0, ge=0)
+    cached_input_cost_micro_usd: int = Field(default=0, ge=0)
+    cache_write_cost_micro_usd: int = Field(default=0, ge=0)
+    capabilities: list[Capability] = Field(default_factory=list)
+
+    def to_spec(self, deployment_id: str) -> DeploymentSpec:
+        return DeploymentSpec(
+            id=deployment_id,
+            base_model=self.base_model,
+            provider=self.provider,
+            endpoint=self.endpoint,
+            trust_tier=self.trust_tier,
+            adapter_id=self.adapter_id,
+            region=self.region,
+            credential_ref=self.credential_ref,
+            weight=self.weight,
+            input_cost_micro_usd=self.input_cost_micro_usd,
+            output_cost_micro_usd=self.output_cost_micro_usd,
+            cached_input_cost_micro_usd=self.cached_input_cost_micro_usd,
+            cache_write_cost_micro_usd=self.cache_write_cost_micro_usd,
+            capabilities=tuple(self.capabilities),
+        )
+
+
+class PutAliasRequest(BaseModel):
+    """A friendly name for one or more base models, in preference order."""
+
+    targets: list[str] = Field(min_length=1)
+
+
+class PutBudgetRequest(BaseModel):
+    """A spending limit. Spend itself is never set here."""
+
+    tenant: str = Field(min_length=1, max_length=64)
+    limit_micro_usd: int = Field(ge=0)
+    scope: BudgetScope = BudgetScope.ORG
+    hard: bool = True
+    headroom_basis_points: int = Field(default=500, ge=0, le=BASIS_POINTS)
+
+
 class PolicyRuleRequest(BaseModel):
     """One rule, as an external authority publishes it."""
 
@@ -581,6 +714,21 @@ class PutPolicyRequest(BaseModel):
     """
 
     rules: list[PolicyRuleRequest] = Field(default_factory=list)
+
+
+def _deployment_json(row: Any) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "base_model": row.base_model,
+        "adapter_id": row.adapter_id,
+        "provider": row.provider,
+        "endpoint": row.endpoint,
+        "region": row.region,
+        "trust_tier": row.trust_tier,
+        "credential_ref": row.credential_ref,
+        "weight": row.weight,
+        "capabilities": sorted(c.name for c in row.capabilities),
+    }
 
 
 def _policy_json(bundle: PolicyBundle) -> dict[str, Any]:

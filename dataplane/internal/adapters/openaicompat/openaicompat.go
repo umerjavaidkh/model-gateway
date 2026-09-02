@@ -201,7 +201,20 @@ func prepareBody(call *core.ProviderCall, stream bool) ([]byte, error) {
 		return nil, core.Wrap(core.CodeInvalidRequest, err, "the request body is not a JSON object")
 	}
 
-	model, err := json.Marshal(call.Deployment.Key.BaseModel)
+	// An adapter is served under its own name, not the base model's. That is
+	// the multi-LoRA convention: one server holds a base model and many
+	// adapters, and the model field is how a request says which to load.
+	//
+	// Without this the routing key carries an adapter all the way through
+	// selection, weighting and shadowing, and then the last hop asks for the
+	// base model — so a canary would measure the thing it was meant to be
+	// compared against, and report that it matched perfectly.
+	served := call.Deployment.Key.BaseModel
+	if call.Deployment.Key.IsAdapter() {
+		served = call.Deployment.Key.AdapterID
+	}
+
+	model, err := json.Marshal(served)
 	if err != nil {
 		return nil, core.Wrap(core.CodeInternal, err, "encoding the model name")
 	}

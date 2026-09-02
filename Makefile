@@ -23,7 +23,7 @@ help: ## Show this help
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | awk -F':.*?## ' '{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 
 .PHONY: check
-check: check-go check-py check-ner cover crosscheck livecheck nercheck admissioncheck ## Run every check CI runs
+check: check-go check-py check-ner cover crosscheck livecheck nercheck admissioncheck reference-check ## Run every check CI runs
 
 .PHONY: check-go
 check-go: ## Format check, vet and test the Go data plane
@@ -79,6 +79,17 @@ wasm-example: ## Build the example WASM guardrail into $(WASM_DIR), named by dig
 .PHONY: nercheck
 nercheck: ## Prove the Go client and the Python sidecar agree about byte offsets
 	./scripts/ner-sidecar-check.sh
+
+.PHONY: reference-check
+reference-check: ## Fail if REFERENCE.md is stale
+	@python3 scripts/build-reference.py >/dev/null
+	@git diff --quiet -- REFERENCE.md || { \
+		echo "REFERENCE.md is stale; run 'make reference' and commit the result"; \
+		git diff --stat -- REFERENCE.md; exit 1; }
+
+.PHONY: reference
+reference: ## Regenerate REFERENCE.md from the code
+	python3 scripts/build-reference.py
 
 .PHONY: proto
 proto: ## Regenerate Go code from proto/ (needs protoc and protoc-gen-go)
