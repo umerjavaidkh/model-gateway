@@ -196,9 +196,10 @@ _TEMPLATE = """<!doctype html>
     <span id="chain" class="muted"></span>
   </div>
   <p class="muted" style="margin:0;font-size:12px;max-width:80ch">
-    Decisions, not measurements: refusals, redactions, and access to classified
-    data. Each record carries the hash of the one before it, so a deleted or
-    edited row stops the chain verifying. Copy the head somewhere this system
+    <b>Decisions, not measurements.</b> Refusals, redactions and access to
+    classified data land here; ordinary successful calls do not &mdash; those are
+    in Traffic. Each record carries the hash of the one before it, so a deleted
+    or edited row stops the chain verifying. Copy the head somewhere this system
     cannot write &mdash; that is what catches a rewrite of the whole chain.
   </p>
   <div class="cards" id="audit-cards"></div>
@@ -545,16 +546,26 @@ function renderAudit(records, actions, verdict) {
     : `<span class="fail">chain broken at #${escape(verdict.broken_at)}</span> \u00b7
        ${escape(verdict.reason)}`;
 
-  const cards = [["records", verdict.checked], ["shown", records.length]];
+  const cards = [["decisions recorded", verdict.checked], ["shown", records.length]];
   for (const [action, n] of Object.entries(actions).slice(0, 4)) cards.push([action, n]);
   $("audit-cards").innerHTML = cards
     .map(([k, v]) => `<div class="card"><b>${escape(v)}</b><span>${escape(k)}</span></div>`)
     .join("");
 
   $("audit-empty").hidden = records.length > 0;
-  $("audit-empty").textContent = refusalsOnly
-    ? "No refusals recorded."
-    : "Nothing recorded yet. Refusals and redactions land here, not ordinary calls.";
+  // Empty is the ordinary state of a healthy gateway, and the tab has to say so
+  // in a way that does not read as a page that failed to load. It also has to
+  // say how to make a record appear, because "send a message and watch" is what
+  // everybody tries first and it is exactly the thing that produces nothing.
+  $("audit-empty").innerHTML = refusalsOnly
+    ? `No refusals recorded. Nothing has been turned away.`
+    : `<p style="margin:0 0 6px"><b>Nothing to audit yet &mdash; which is the healthy state.</b></p>
+       <p style="margin:0;font-size:13px">A successful call to a public model is
+       <i>not</i> recorded here; it is in <b>Traffic</b>, with its stage timings.
+       This tab fills up when something is <b>refused</b>, when <b>PII is
+       redacted</b>, or when <b>classified data</b> is accessed.</p>
+       <p style="margin:8px 0 0;font-size:13px">To see one: send from the Chat
+       tab with a wrong key, or ask for a model that does not exist.</p>`;
   $("audit-rows").innerHTML = records.map((r, i) => `
     <tr data-i="${i}">
       <td class="muted">${r.seq}</td>
