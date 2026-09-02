@@ -39,7 +39,10 @@ dataplane/          Go. The request path: auth -> admit -> route -> adapt.
   internal/pii/       Detection, transformation, and restoration across chunks.
   cmd/gateway/        The worker binary.
   cmd/snapshotgen/    Writes a demo snapshot, so the repo runs without a control plane.
+  cmd/admissionrunner/ Runs a contract suite against a component, off both planes.
   internal/contracts/ Per-port contract suites; also the plugin admission gate.
+  internal/sandbox/   Container isolation for running a component nobody has vetted.
+  internal/admission/ Runs a suite in a sandbox and reports a verdict it cannot act on.
   internal/adapters/  Concrete port implementations.
 controlplane/       Python. Registry, identity, policy authoring, snapshot compilation.
   domain/             Frozen dataclasses. What the control plane reasons about.
@@ -171,5 +174,6 @@ decided and why.
 | M9a — PII chain: detection, redact/hash/tokenize, streaming restoration | **done** |
 | M9b — NER sidecar for names, locations and organisations | **done** |
 | M10a — Component registry: manifests, admission records, binding gate | **done** |
-| M10b — Sandboxed contract-test runner | next |
+| M10b — Sandboxed contract-test runner and the sidecar protocol | **done** |
+| M10c — WASM in-process components, signed manifests | next |
 | M11+ — Fine-tuning | |

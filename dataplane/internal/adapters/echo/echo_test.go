@@ -10,7 +10,7 @@ import (
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/core"
 )
 
-func sampleCall(t *testing.T) *core.ProviderCall {
+func sampleCall(t contracts.T) *core.ProviderCall {
 	t.Helper()
 	return &core.ProviderCall{
 		Deployment: core.Deployment{
@@ -23,14 +23,14 @@ func sampleCall(t *testing.T) *core.ProviderCall {
 }
 
 func TestEchoSatisfiesProviderPort(t *testing.T) {
-	contracts.RunProviderSuite(t,
-		func(*testing.T) core.ProviderPort { return echo.New() },
+	contracts.RunProviderSuite(contracts.Adapt(t),
+		func(contracts.T) core.ProviderPort { return echo.New() },
 		sampleCall,
 	)
 }
 
 func TestStreamReassemblesToTheRequestBody(t *testing.T) {
-	call := sampleCall(t)
+	call := sampleCall(contracts.Adapt(t))
 	stream, err := echo.New().Stream(t.Context(), call)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
@@ -65,7 +65,7 @@ func TestInvokeDoesNotAliasTheRequestBody(t *testing.T) {
 	// The router may retry with the same call against another deployment, so an
 	// adapter that hands back a slice of the caller's buffer would let a
 	// response mutation corrupt the next attempt.
-	call := sampleCall(t)
+	call := sampleCall(contracts.Adapt(t))
 	resp, err := echo.New().Invoke(t.Context(), call)
 	if err != nil {
 		t.Fatalf("Invoke: %v", err)

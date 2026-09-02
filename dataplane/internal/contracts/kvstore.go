@@ -5,7 +5,6 @@ import (
 	"errors"
 	"strconv"
 	"sync"
-	"testing"
 	"time"
 
 	"github.com/umerjavaidkh/model-gateway/dataplane/internal/core"
@@ -34,7 +33,7 @@ type KVTarget struct {
 }
 
 // KVFactory builds the store under test.
-type KVFactory func(t *testing.T) KVTarget
+type KVFactory func(t T) KVTarget
 
 // RunKVStoreSuite asserts the behaviour every KVStore must have.
 //
@@ -42,10 +41,10 @@ type KVFactory func(t *testing.T) KVTarget
 // leases permits through this interface and cannot tell them apart, so a
 // difference between them is a difference in how limits are enforced — which is
 // exactly the kind of thing that shows up as a production-only discrepancy.
-func RunKVStoreSuite(t *testing.T, newStore KVFactory) {
+func RunKVStoreSuite(t T, newStore KVFactory) {
 	t.Helper()
 
-	t.Run("a missing key is absent, not an error", func(t *testing.T) {
+	t.Run("a missing key is absent, not an error", func(t T) {
 		target := newStore(t)
 		store, prefix := target.Store, target.Prefix
 		value, found, err := store.Get(t.Context(), prefix+"missing")
@@ -57,7 +56,7 @@ func RunKVStoreSuite(t *testing.T, newStore KVFactory) {
 		}
 	})
 
-	t.Run("set then get", func(t *testing.T) {
+	t.Run("set then get", func(t T) {
 		target := newStore(t)
 		store, prefix := target.Store, target.Prefix
 		key := prefix + "set"
@@ -74,7 +73,7 @@ func RunKVStoreSuite(t *testing.T, newStore KVFactory) {
 		}
 	})
 
-	t.Run("incr creates and accumulates", func(t *testing.T) {
+	t.Run("incr creates and accumulates", func(t T) {
 		target := newStore(t)
 		store, prefix := target.Store, target.Prefix
 		key := prefix + "incr"
@@ -90,7 +89,7 @@ func RunKVStoreSuite(t *testing.T, newStore KVFactory) {
 		}
 	})
 
-	t.Run("a counter reads back as its decimal text", func(t *testing.T) {
+	t.Run("a counter reads back as its decimal text", func(t T) {
 		// The limiter reads counters with Get and parses them. If one store
 		// wrote binary and another decimal, a window would look empty on one
 		// and full on the other.
@@ -114,7 +113,7 @@ func RunKVStoreSuite(t *testing.T, newStore KVFactory) {
 		}
 	})
 
-	t.Run("incr does not extend an existing expiry", func(t *testing.T) {
+	t.Run("incr does not extend an existing expiry", func(t T) {
 		// The property a rate-limit window depends on. If every increment
 		// pushed the expiry out, a continuously busy key would never expire and
 		// its window would never roll — so the busiest principal, the one the
@@ -141,7 +140,7 @@ func RunKVStoreSuite(t *testing.T, newStore KVFactory) {
 		}
 	})
 
-	t.Run("delete removes", func(t *testing.T) {
+	t.Run("delete removes", func(t T) {
 		target := newStore(t)
 		store, prefix := target.Store, target.Prefix
 		key := prefix + "delete"
@@ -162,7 +161,7 @@ func RunKVStoreSuite(t *testing.T, newStore KVFactory) {
 		}
 	})
 
-	t.Run("incr is atomic under concurrency", func(t *testing.T) {
+	t.Run("incr is atomic under concurrency", func(t T) {
 		// The limiter leases permits with Incr from every worker at once. A
 		// lost update here is over-admission that no amount of tuning explains.
 		target := newStore(t)
@@ -197,7 +196,7 @@ func RunKVStoreSuite(t *testing.T, newStore KVFactory) {
 		}
 	})
 
-	t.Run("a cancelled context is honoured", func(t *testing.T) {
+	t.Run("a cancelled context is honoured", func(t T) {
 		target := newStore(t)
 		store, prefix := target.Store, target.Prefix
 		ctx, cancel := context.WithCancel(t.Context())
@@ -213,7 +212,7 @@ func RunKVStoreSuite(t *testing.T, newStore KVFactory) {
 }
 
 // advance moves the target's clock forward, sleeping when it has none.
-func advance(t *testing.T, target KVTarget, d time.Duration) {
+func advance(t T, target KVTarget, d time.Duration) {
 	t.Helper()
 	if target.Advance != nil {
 		target.Advance(d)

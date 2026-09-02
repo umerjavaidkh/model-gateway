@@ -18,7 +18,7 @@ help: ## Show this help
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | awk -F':.*?## ' '{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 
 .PHONY: check
-check: check-go check-py check-ner cover crosscheck livecheck nercheck ## Run every check CI runs
+check: check-go check-py check-ner cover crosscheck livecheck nercheck admissioncheck ## Run every check CI runs
 
 .PHONY: check-go
 check-go: ## Format check, vet and test the Go data plane
@@ -57,6 +57,10 @@ crosscheck: ## Prove the Python builder and the Go worker agree on the snapshot
 .PHONY: livecheck
 livecheck: ## Prove configuration reaches a running worker, and survives a control-plane outage
 	./scripts/live-subscription-check.sh
+
+.PHONY: admissioncheck
+admissioncheck: ## Prove a component cannot be bound until the runner vouches for it
+	./scripts/admission-check.sh
 
 .PHONY: nercheck
 nercheck: ## Prove the Go client and the Python sidecar agree about byte offsets
