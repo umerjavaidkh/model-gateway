@@ -404,7 +404,12 @@ async function send() {
     if (!res.ok) {
       turn.error = body?.error?.message || ("HTTP " + res.status);
     } else {
-      turn.reply = body?.choices?.[0]?.message?.content ?? JSON.stringify(body, null, 2);
+      const said = body?.choices?.[0]?.message?.content;
+      // A provider that returned no completion is not an error — the echo
+      // adapter answers with the request it was given — but showing raw JSON
+      // with no explanation reads as the page failing to render a reply.
+      turn.raw = said === undefined;
+      turn.reply = said ?? JSON.stringify(body, null, 2);
       turn.usage = body?.usage;
     }
     $("prompt").value = "";
@@ -431,7 +436,10 @@ function drawTranscript() {
     <div class="turn">
       <p class="said me">${escape(t.prompt)}</p>
       ${t.error ? `<p class="fail" style="margin:0">${escape(t.error)}</p>`
-                : t.reply !== undefined ? `<pre>${escape(t.reply)}</pre>`
+                : t.reply !== undefined ? `${t.raw
+                    ? `<p class="muted" style="margin:0 0 6px;font-size:12px">
+                         no completion in the response — showing it as it came back</p>`
+                    : ""}<pre>${escape(t.reply)}</pre>`
                 : `<p class="muted" style="margin:0">waiting…</p>`}
       <div class="meta">
         ${escape(t.model)} · ${t.ms !== undefined ? t.ms + " ms" : "…"}
