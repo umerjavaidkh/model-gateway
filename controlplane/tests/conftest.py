@@ -19,6 +19,13 @@ from model_gateway_control.domain.catalog import (
     RoutingKey,
     TrustTier,
 )
+from model_gateway_control.domain.component import (
+    Component,
+    Manifest,
+    Port,
+    Registry,
+    admitted,
+)
 from model_gateway_control.domain.identity import (
     BudgetRef,
     Principal,
@@ -33,6 +40,20 @@ BUILT_AT = datetime(2026, 9, 1, 12, 0, 0, tzinfo=UTC)
 ROUTE_LLAMA = RoutingKey(base_model="llama-3.3-70b")
 ROUTE_ADAPTER = RoutingKey(base_model="llama-3.3-70b", adapter_id="triage-v3")
 ROUTE_GPT = RoutingKey(base_model="gpt-4o-mini")
+
+
+def guardrail_component(name: str, version: str, latency_budget_ms: int = 50) -> Component:
+    """An admitted guardrail component, for fixtures that only need a binding to resolve."""
+    return admitted(
+        Manifest(
+            name=name,
+            version=version,
+            port=Port.GUARDRAIL,
+            latency_budget_ms=latency_budget_ms,
+        ),
+        suite_version="1",
+        runner="test",
+    )
 
 
 @pytest.fixture
@@ -72,7 +93,15 @@ def fleet() -> Fleet:
             ),
         ),
         aliases=(ModelAlias(name="fast", targets=(ROUTE_GPT,)),),
-        default_plugins=(PluginBinding(port="guardrail", component="regex-pii", version="1.0.0"),),
+        registry=Registry(
+            (
+                guardrail_component("regex-pii", "1.0.0"),
+                guardrail_component("presidio", "2.1.0"),
+            )
+        ),
+        default_plugins=(
+            PluginBinding(port=Port.GUARDRAIL, component="regex-pii", version="1.0.0"),
+        ),
         policy_bundle_ref="bundle-7",
     )
 
@@ -112,6 +141,6 @@ def tenant() -> Tenant:
                 spent_micro_usd=1_250_000,
             ),
         ),
-        plugins=(PluginBinding(port="guardrail", component="presidio", version="2.1.0"),),
+        plugins=(PluginBinding(port=Port.GUARDRAIL, component="presidio", version="2.1.0"),),
         min_trust_tier=TrustTier.EXTERNAL,
     )

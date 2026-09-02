@@ -7,6 +7,8 @@
              │                 └─ apps ─────┤
              ├─ budgets                     └── api_keys ── key_budgets
              ├─ aliases ── alias_targets
+             ├─ plugin_bindings ──> components ─┬─ component_capabilities
+             │                                  └─ component_admissions
              └─ (deployments and their capabilities are fleet-wide)
 
 Ancestry is ordinary parent references rather than a materialized closure table.
@@ -396,6 +398,95 @@ class PluginBinding(Base, TimestampMixin):
     config_ref: Mapped[str] = mapped_column(String(512), nullable=False, default="")
 
     tenant: Mapped[Tenant | None] = relationship(back_populates="plugins")
+
+
+class Component(Base, TimestampMixin):
+    """A registered component: what a publisher claims it is.
+
+    ``manifest_digest`` is stored rather than recomputed on read, because it is
+    what an admission binds to. Recomputing it would make an admission valid
+    again after an edit that should have invalidated it.
+    """
+
+    __tablename__ = "components"
+    __table_args__ = (UniqueConstraint("name", "version", name="uq_components_name_version"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    version: Mapped[str] = mapped_column(String(64), nullable=False)
+    port: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    manifest_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    #: The submitted config schema, verbatim. Text rather than a JSON column so
+    #: the schema stays expressible on both SQLite and Postgres, and so the
+    #: digest covers exactly the bytes that were submitted.
+    config_schema: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    latency_budget_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    failure_mode: Mapped[str] = mapped_column(String(16), nullable=False, default="closed")
+    execution: Mapped[str] = mapped_column(String(16), nullable=False, default="sidecar")
+    image: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+
+    capabilities: Mapped[list[ComponentCapability]] = relationship(
+        back_populates="component", cascade="all, delete-orphan", lazy="selectin"
+    )
+    admissions: Mapped[list[ComponentAdmission]] = relationship(
+        back_populates="component",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+        order_by="ComponentAdmission.id",
+    )
+
+
+class ComponentCapability(Base):
+    """One capability a component declares it needs.
+
+    A child table rather than a delimited string, for the same reason
+    deployment capabilities are: a delimited string cannot be queried, and
+    "which components ask for network access" is a question worth asking.
+    """
+
+    __tablename__ = "component_capabilities"
+    __table_args__ = (UniqueConstraint("component_id", "name", name="uq_component_capabilities"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    component_id: Mapped[int] = mapped_column(
+        ForeignKey("components.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    component: Mapped[Component] = relationship(back_populates="capabilities")
+
+
+class ComponentAdmission(Base):
+    """One contract-suite run against one component.
+
+    Append-only: runs are never updated, and the latest row for a component is
+    its current admission. Overwriting would erase the history that makes
+    "when did this stop being tested" answerable — and a failing re-run is
+    exactly the row worth keeping.
+    """
+
+    __tablename__ = "component_admissions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    component_id: Mapped[int] = mapped_column(
+        ForeignKey("components.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    suite: Mapped[str] = mapped_column(String(32), nullable=False)
+    suite_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    #: The manifest this run actually examined. An admission whose digest no
+    #: longer matches the component's manifest does not admit it.
+    manifest_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    passed: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    #: What executed the suite. "The control plane ran it in-process" has to be
+    #: something an auditor can rule out.
+    runner: Mapped[str] = mapped_column(String(255), nullable=False)
+    evidence_ref: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    recorded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    component: Mapped[Component] = relationship(back_populates="admissions")
 
 
 class FleetState(Base, TimestampMixin):

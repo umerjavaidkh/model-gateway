@@ -24,6 +24,14 @@ from model_gateway_control.api import idempotency
 from model_gateway_control.db.repository import Repository
 from model_gateway_control.db.session import session_factory
 from model_gateway_control.domain.catalog import TrustTier
+from model_gateway_control.domain.component import (
+    Admission,
+    Component,
+    Execution,
+    FailureMode,
+    Manifest,
+    Port,
+)
 from model_gateway_control.domain.identity import RateLimit
 from model_gateway_control.errors import (
     ConflictError,
@@ -33,6 +41,7 @@ from model_gateway_control.errors import (
     NotFoundError,
 )
 from model_gateway_control.service.keys import KeyService
+from model_gateway_control.service.registry import RegistryService
 from model_gateway_control.snapshot import build_snapshot
 
 #: Gateway error to HTTP status. The only place that knows both, which is what
@@ -93,6 +102,61 @@ class KeyResponse(BaseModel):
 
     key_id: str
     presented: str
+
+
+class RegisterComponentRequest(BaseModel):
+    """A manifest submitted to the registry.
+
+    Mirrors ``domain.component.Manifest``. It is a separate type because this
+    one is a wire contract with a stability obligation, and the domain type is
+    free to be refactored.
+    """
+
+    name: str = Field(min_length=3, max_length=64)
+    version: str = Field(min_length=1, max_length=64)
+    port: Port
+    config_schema: str = "{}"
+    latency_budget_ms: int = Field(default=0, ge=0)
+    failure_mode: FailureMode = FailureMode.CLOSED
+    execution: Execution = Execution.SIDECAR
+    capabilities: list[str] = Field(default_factory=list)
+    image: str = ""
+
+    def to_manifest(self) -> Manifest:
+        return Manifest(
+            name=self.name,
+            version=self.version,
+            port=self.port,
+            config_schema=self.config_schema,
+            latency_budget_ms=self.latency_budget_ms,
+            failure_mode=self.failure_mode,
+            execution=self.execution,
+            capabilities=tuple(self.capabilities),
+            image=self.image,
+        )
+
+
+class RecordAdmissionRequest(BaseModel):
+    """The verdict of a contract-suite run that happened somewhere else."""
+
+    suite: Port
+    suite_version: str = Field(min_length=1, max_length=64)
+    #: The manifest the suite actually examined. Sent rather than assumed, so a
+    #: run against a stale copy is rejected instead of silently admitting one.
+    manifest_digest: str = Field(min_length=64, max_length=64)
+    passed: bool
+    runner: str = Field(min_length=1, max_length=255)
+    evidence_ref: str = ""
+
+    def to_admission(self) -> Admission:
+        return Admission(
+            suite=self.suite,
+            suite_version=self.suite_version,
+            manifest_digest=self.manifest_digest,
+            passed=self.passed,
+            runner=self.runner,
+            evidence_ref=self.evidence_ref,
+        )
 
 
 def create_app(settings: AdminSettings) -> FastAPI:
@@ -236,6 +300,58 @@ def create_app(settings: AdminSettings) -> FastAPI:
         await session.commit()
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
+    # ---- component registry -------------------------------------------------
+    #
+    # Registration and admission are separate endpoints because they are
+    # separate authorities. Submitting a manifest is a publisher's act;
+    # admitting one is the platform's, and it requires a contract-suite run
+    # that this process must not perform itself.
+
+    @app.post("/v1/components", status_code=status.HTTP_201_CREATED, dependencies=[Authorized])
+    async def register_component(body: RegisterComponentRequest, session: Session) -> Response:
+        component = await RegistryService(session).register(body.to_manifest())
+        await session.commit()
+        return _json_response(status.HTTP_201_CREATED, _component_json(component))
+
+    @app.get("/v1/components", dependencies=[Authorized])
+    async def list_components(session: Session, port: Port | None = None) -> Response:
+        components = await RegistryService(session).list(port)
+        return _json_response(
+            status.HTTP_200_OK, {"components": [_component_json(c) for c in components]}
+        )
+
+    @app.get("/v1/components/{name}/{version}", dependencies=[Authorized])
+    async def get_component(name: str, version: str, session: Session) -> Response:
+        component = await RegistryService(session).get(name, version)
+        return _json_response(status.HTTP_200_OK, _component_json(component))
+
+    @app.post("/v1/components/{name}/{version}/admissions", dependencies=[Authorized])
+    async def record_admission(
+        name: str, version: str, body: RecordAdmissionRequest, session: Session
+    ) -> Response:
+        """Record the verdict of a contract-suite run performed elsewhere.
+
+        The runner reports; it does not decide. The service checks the verdict
+        binds to the manifest that is actually registered, so a run against a
+        different artifact cannot admit this one.
+        """
+        component = await RegistryService(session).record_admission(
+            name, version, body.to_admission()
+        )
+        await session.commit()
+        return _json_response(status.HTTP_200_OK, _component_json(component))
+
+    @app.delete("/v1/components/{name}/{version}", dependencies=[Authorized])
+    async def retire_component(name: str, version: str, session: Session) -> Response:
+        """Withdraw a component from future snapshots.
+
+        Not a deletion: existing snapshots that name it stay valid, and the
+        record of what was once bindable is what an audit needs.
+        """
+        component = await RegistryService(session).retire(name, version)
+        await session.commit()
+        return _json_response(status.HTTP_200_OK, _component_json(component))
+
     @app.post("/v1/snapshots", dependencies=[Authorized])
     async def build(session: Session) -> Response:
         """Compile the current configuration and report what it produced.
@@ -279,6 +395,33 @@ def create_app(settings: AdminSettings) -> FastAPI:
         )
 
     return app
+
+
+def _component_json(component: Component) -> dict[str, Any]:
+    manifest = component.manifest
+    admission = component.admission
+    return {
+        "name": manifest.name,
+        "version": manifest.version,
+        "port": str(manifest.port),
+        "status": str(component.status),
+        "digest": manifest.digest(),
+        "latency_budget_ms": manifest.latency_budget_ms,
+        "failure_mode": str(manifest.failure_mode),
+        "execution": str(manifest.execution),
+        "capabilities": list(manifest.capabilities),
+        "image": manifest.image,
+        "admission": None
+        if admission is None
+        else {
+            "suite": str(admission.suite),
+            "suite_version": admission.suite_version,
+            "manifest_digest": admission.manifest_digest,
+            "passed": admission.passed,
+            "runner": admission.runner,
+            "evidence_ref": admission.evidence_ref,
+        },
+    }
 
 
 def _trust_tier(name: str) -> TrustTier:

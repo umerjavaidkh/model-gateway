@@ -21,6 +21,7 @@ work that stays in the request path is work multiplied by every request forever.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Sequence
 from datetime import UTC, datetime
 
 from model_gateway_control.domain.budget import Budget, BudgetScope
@@ -31,6 +32,7 @@ from model_gateway_control.domain.catalog import (
     RoutingKey,
     TrustTier,
 )
+from model_gateway_control.domain.component import Component, Port, Registry
 from model_gateway_control.domain.identity import BudgetRef, Principal
 from model_gateway_control.domain.policy import PolicyBundle, PolicyEffect
 from model_gateway_control.domain.tenant import (
@@ -40,18 +42,21 @@ from model_gateway_control.domain.tenant import (
     PluginBinding,
     Tenant,
 )
-from model_gateway_control.errors import InvalidRequestError
+from model_gateway_control.errors import GatewayError, InvalidRequestError
 from model_gateway_control.wire import snapshot_pb2 as pb
 
 #: Names the hash, so the format can change later without every stored digest
 #: becoming ambiguous. Must match the Go side's ``wire.DigestPrefix``.
 DIGEST_PREFIX = "sha256:"
 
+#: Only the data-plane ports have a wire representation. A control-plane
+#: component is governed by the same registry but never reaches a worker, so a
+#: binding for one is a build error rather than a field nothing reads.
 _PORTS = {
-    "provider": pb.PORT_PROVIDER,
-    "guardrail": pb.PORT_GUARDRAIL,
-    "store": pb.PORT_STORE,
-    "telemetry": pb.PORT_TELEMETRY,
+    Port.PROVIDER: pb.PORT_PROVIDER,
+    Port.GUARDRAIL: pb.PORT_GUARDRAIL,
+    Port.STORE: pb.PORT_STORE,
+    Port.TELEMETRY: pb.PORT_TELEMETRY,
 }
 
 _TRUST_TIERS = {
@@ -129,6 +134,63 @@ def _validate(fleet: Fleet, tenants: list[Tenant]) -> None:
             seen_prefixes[prefix] = tenant.id
 
         _validate_tenant(tenant)
+        _validate_bindings(fleet.registry, tenant.id, tenant.plugins, tenant.guardrails)
+
+    _validate_bindings(fleet.registry, None, fleet.default_plugins, fleet.default_guardrails)
+
+
+def _validate_bindings(
+    registry: Registry,
+    tenant: str | None,
+    plugins: Sequence[PluginBinding],
+    guardrails: Sequence[GuardrailBinding],
+) -> None:
+    """Reject a binding the registry cannot vouch for.
+
+    This is the admission gate's only teeth. Without it the registry is a table
+    nobody consults: a binding naming a component that was never registered,
+    never passed its suite, or has since been retired would compile into a
+    snapshot and reach every worker, where the failure is a warning in a log at
+    request time — for a control an operator believes is enforcing.
+    """
+    where = f"tenant {tenant!r}" if tenant is not None else "the fleet defaults"
+
+    for plugin in plugins:
+        _require_bindable(
+            _resolve(registry, plugin.port, plugin.component, plugin.version, where), where
+        )
+
+    for guardrail in guardrails:
+        component = _resolve(
+            registry, Port.GUARDRAIL, guardrail.component, guardrail.version, where
+        )
+        _require_bindable(component, where)
+
+        declared = component.manifest.latency_budget_ms
+        if declared and guardrail.timeout_ms < declared:
+            # The binding would cut the component off before it could finish,
+            # on every request. Which way that fails depends on the failure
+            # mode, and both ways are wrong.
+            raise InvalidRequestError(
+                f"{where} allows {component.manifest.ref} {guardrail.timeout_ms}ms, "
+                f"but it declares it needs {declared}ms"
+            )
+
+
+def _resolve(registry: Registry, port: Port, component: str, version: str, where: str) -> Component:
+    try:
+        return registry.resolve(port, component, version)
+    except GatewayError as exc:
+        raise InvalidRequestError(f"{where}: {exc.message}") from exc
+
+
+def _require_bindable(component: Component, where: str) -> None:
+    if component.is_bindable:
+        return
+    raise InvalidRequestError(
+        f"{where} binds {component.manifest.ref}, which is {component.status} — "
+        f"only an admitted, active component can enter a snapshot"
+    )
 
 
 def _validate_tenant(tenant: Tenant) -> None:
@@ -244,8 +306,13 @@ def _encode_alias(a: ModelAlias) -> pb.ModelAlias:
 
 
 def _encode_plugin(b: PluginBinding) -> pb.PluginBinding:
+    port = _PORTS.get(b.port)
+    if port is None:
+        # Defaulting to PORT_UNSPECIFIED would ship a binding the worker
+        # silently ignores, which is the failure this whole module removes.
+        raise InvalidRequestError(f"{b.port} components do not run in the data plane")
     return pb.PluginBinding(
-        port=_PORTS.get(b.port, pb.PORT_UNSPECIFIED),
+        port=port,
         component=b.component,
         version=b.version,
         config_ref=b.config_ref,

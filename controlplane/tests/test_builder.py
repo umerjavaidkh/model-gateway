@@ -13,11 +13,12 @@ import pytest
 
 from model_gateway_control.domain.budget import Budget, BudgetScope
 from model_gateway_control.domain.catalog import ModelAlias, RoutingKey, TrustTier
+from model_gateway_control.domain.component import Port, Registry, Status
 from model_gateway_control.domain.identity import BudgetRef, Principal
 from model_gateway_control.domain.tenant import Fleet, Tenant
 from model_gateway_control.errors import InvalidRequestError
 from model_gateway_control.snapshot import build_snapshot, seal
-from tests.conftest import BUILT_AT, ROUTE_GPT, ROUTE_LLAMA
+from tests.conftest import BUILT_AT, ROUTE_GPT, ROUTE_LLAMA, guardrail_component
 
 
 def test_snapshot_carries_both_layers(fleet: Fleet, tenant: Tenant) -> None:
@@ -255,8 +256,19 @@ def test_guardrail_bindings_reach_the_snapshot(fleet: Fleet, tenant: Tenant) -> 
     # while an operator believes it is.
     from model_gateway_control.domain.tenant import FailureMode, GuardrailBinding
 
+    registered = dataclasses.replace(
+        fleet,
+        registry=Registry(
+            (
+                guardrail_component("secret-scan", "1.0.0", latency_budget_ms=5),
+                guardrail_component("injection-heuristics", "1.0.0"),
+            )
+        ),
+        default_plugins=(),
+    )
     guarded = dataclasses.replace(
         tenant,
+        plugins=(),
         guardrails=(
             GuardrailBinding(
                 component="secret-scan",
@@ -273,7 +285,7 @@ def test_guardrail_bindings_reach_the_snapshot(fleet: Fleet, tenant: Tenant) -> 
         ),
     )
 
-    snapshot = build_snapshot(fleet, [guarded], BUILT_AT)
+    snapshot = build_snapshot(registered, [guarded], BUILT_AT)
     bindings = {g.component: g for g in snapshot.tenants[0].guardrails}
 
     assert bindings["secret-scan"].blocking is True
@@ -350,3 +362,113 @@ def test_duplicate_rule_ids_are_rejected() -> None:
     rule = PolicyRule(id="same", effect=PolicyEffect.ALLOW)
     with pytest.raises(InvalidRequestError, match="duplicate policy rule"):
         PolicyBundle(rules=(rule, rule))
+
+
+# --- the registry gate ------------------------------------------------------
+#
+# The registry is only a gate if the builder refuses what it cannot vouch for.
+# Every case below would otherwise compile into a snapshot and reach every
+# worker, where an unresolvable binding is a warning in a log at request time.
+
+
+def _guarded(tenant: Tenant, **binding: object) -> Tenant:
+    from model_gateway_control.domain.tenant import GuardrailBinding
+
+    return dataclasses.replace(
+        tenant,
+        plugins=(),
+        guardrails=(GuardrailBinding(**binding),),  # type: ignore[arg-type]
+    )
+
+
+def test_a_binding_naming_an_unregistered_component_does_not_compile(
+    fleet: Fleet, tenant: Tenant
+) -> None:
+    bare = dataclasses.replace(fleet, registry=Registry(), default_plugins=())
+
+    with pytest.raises(InvalidRequestError, match="regex-pii"):
+        build_snapshot(bare, [dataclasses.replace(tenant, plugins=fleet.default_plugins)], BUILT_AT)
+
+
+def test_a_binding_naming_a_pending_component_does_not_compile(
+    fleet: Fleet, tenant: Tenant
+) -> None:
+    # Registered is not admitted. If this compiled, "register" would be the
+    # call that grants production access.
+    from model_gateway_control.domain.component import Component, Manifest
+
+    pending = Component(
+        manifest=Manifest(
+            name="untested", version="1.0.0", port=Port.GUARDRAIL, latency_budget_ms=50
+        )
+    )
+    registered = dataclasses.replace(fleet, registry=Registry((pending,)), default_plugins=())
+
+    with pytest.raises(InvalidRequestError, match="pending"):
+        build_snapshot(
+            registered, [_guarded(tenant, component="untested", version="1.0.0")], BUILT_AT
+        )
+
+
+def test_a_binding_naming_a_retired_component_does_not_compile(
+    fleet: Fleet, tenant: Tenant
+) -> None:
+    # Retiring has to actually stop new snapshots, or it is a label.
+    retired = dataclasses.replace(guardrail_component("presidio", "2.1.0"), status=Status.RETIRED)
+    registered = dataclasses.replace(fleet, registry=Registry((retired,)), default_plugins=())
+
+    with pytest.raises(InvalidRequestError, match="retired"):
+        build_snapshot(
+            registered, [_guarded(tenant, component="presidio", version="2.1.0")], BUILT_AT
+        )
+
+
+def test_a_binding_that_starves_a_guardrail_of_its_declared_budget_does_not_compile(
+    fleet: Fleet, tenant: Tenant
+) -> None:
+    # The guardrail would be cut off on every request. Which way that fails
+    # depends on the failure mode, and both ways are wrong.
+    registered = dataclasses.replace(
+        fleet,
+        registry=Registry((guardrail_component("presidio", "2.1.0", latency_budget_ms=200),)),
+        default_plugins=(),
+    )
+
+    with pytest.raises(InvalidRequestError, match="needs 200ms"):
+        build_snapshot(
+            registered,
+            [_guarded(tenant, component="presidio", version="2.1.0", timeout_ms=50)],
+            BUILT_AT,
+        )
+
+
+def test_a_fleet_default_binding_is_checked_too(fleet: Fleet) -> None:
+    # Fleet defaults apply to every tenant that declares nothing, so an
+    # unchecked one is the widest possible version of this mistake.
+    bare = dataclasses.replace(fleet, registry=Registry())
+
+    with pytest.raises(InvalidRequestError, match="fleet defaults"):
+        build_snapshot(bare, [], BUILT_AT)
+
+
+def test_a_control_plane_component_cannot_be_bound_into_a_snapshot(
+    fleet: Fleet, tenant: Tenant
+) -> None:
+    # A trainer never reaches a worker. Encoding the binding anyway would ship
+    # a port the data plane silently ignores.
+    from model_gateway_control.domain.component import Manifest, admitted
+    from model_gateway_control.domain.tenant import PluginBinding
+
+    trainer = admitted(
+        Manifest(name="llamafactory", version="0.9.0", port=Port.TRAINER),
+        suite_version="1",
+        runner="test",
+    )
+    registered = dataclasses.replace(
+        fleet,
+        registry=Registry((trainer,)),
+        default_plugins=(PluginBinding(port=Port.TRAINER, component="llamafactory"),),
+    )
+
+    with pytest.raises(InvalidRequestError, match="do not run in the data plane"):
+        build_snapshot(registered, [dataclasses.replace(tenant, plugins=())], BUILT_AT)

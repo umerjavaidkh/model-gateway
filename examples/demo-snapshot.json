@@ -41,6 +41,34 @@
         ]
       }
     ],
+    "registry": [
+      {
+        "name": "secret-scan",
+        "version": "1.0.0",
+        "port": "guardrail",
+        "latency_budget_ms": 5,
+        "failure_mode": "closed",
+        "execution": "builtin",
+        "admission": {
+          "suite_version": "0",
+          "runner": "operator-declared",
+          "evidence_ref": "examples/demo-snapshot.json"
+        }
+      },
+      {
+        "name": "injection-heuristics",
+        "version": "1.0.0",
+        "port": "guardrail",
+        "latency_budget_ms": 50,
+        "failure_mode": "open",
+        "execution": "builtin",
+        "admission": {
+          "suite_version": "0",
+          "runner": "operator-declared",
+          "evidence_ref": "examples/demo-snapshot.json"
+        }
+      }
+    ],
     "policy_bundle_ref": "demo",
     "default_guardrails": [
       {
