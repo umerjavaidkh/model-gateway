@@ -28,6 +28,7 @@ from datetime import datetime
 from enum import StrEnum
 from uuid import uuid4
 
+from model_gateway_control.domain.scorecard import Decision, PromotionGate, Scorecard
 from model_gateway_control.errors import ConflictError, InvalidRequestError
 
 _NAME = re.compile(r"^[a-z0-9][a-z0-9-]{2,63}$")
@@ -54,10 +55,15 @@ class Phase(StrEnum):
     SUBMITTING = "submitting"
     #: The trainer has it and is working.
     TRAINING = "training"
-    #: Training produced an artifact. Whether it may serve traffic is the eval
-    #: gate's decision, which is a separate module — a trained adapter sits
-    #: here until something vouches for it.
+    #: Training produced an artifact. Not yet allowed to serve: whether it may
+    #: is the eval gate's decision.
     TRAINED = "trained"
+    #: The suite is running against the artifact, and against the base model
+    #: too when the gate has something that must not regress.
+    EVALUATING = "evaluating"
+    #: Cleared the gate. Eligible to enter the routing pool — actually entering
+    #: it is a rollout, which is weighted rather than a flip.
+    READY = "ready"
     #: Terminal. Reached from any non-terminal phase.
     FAILED = "failed"
     #: Terminal, and operator-initiated.
@@ -68,7 +74,7 @@ class Phase(StrEnum):
 #: than in the reconciler: a loop that re-submits a finished job books a second
 #: GPU run, and "the reconciler has a bug" is not a good reason for that to be
 #: possible.
-TERMINAL = frozenset({Phase.TRAINED, Phase.FAILED, Phase.CANCELLED})
+TERMINAL = frozenset({Phase.TRAINED, Phase.READY, Phase.FAILED, Phase.CANCELLED})
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -119,10 +125,15 @@ class Spec:
     #: inference budget. One fine-tune can exceed a month of serving, and a
     #: shared budget means training silently starves inference or the reverse.
     budget_ref: str = ""
-    #: What must vouch for the artifact before it can serve. Recorded here so
-    #: the gate a job will face is fixed when it is submitted rather than being
-    #: whatever the configuration happens to say when it finishes.
+    #: What must vouch for the artifact before it can serve. Empty means
+    #: nothing does, and the job stops at TRAINED — an artifact nobody has
+    #: measured is one an operator promotes deliberately, not one the loop
+    #: promotes because no gate was configured.
     eval_suite: str = ""
+    #: The bar that suite must clear. Recorded on the spec so the bar a job
+    #: faces is fixed when it is submitted: lowering the gate afterwards cannot
+    #: retroactively promote something that already failed it.
+    promotion_gate: PromotionGate = field(default_factory=PromotionGate)
 
     def __post_init__(self) -> None:
         if not self.tenant:
@@ -146,8 +157,13 @@ class Status:
     external_id: str = ""
     #: Where the trained adapter ended up. Absent until training finishes.
     artifact_ref: str = ""
-    #: Why it failed, for a terminal failure.
+    #: Why it failed, for a terminal failure — or why the gate passed.
     reason: str = ""
+    #: What the suite measured about the artifact.
+    scorecard: Scorecard | None = None
+    #: What it measured about the base model, when the gate needed something to
+    #: compare against.
+    baseline: Scorecard | None = None
     #: What the run cost, in integer micro-USD. Money is never a float.
     cost_micro_usd: int = 0
     #: How many times the reconciler has acted on this job. An operator asking
@@ -231,14 +247,34 @@ class FineTuneJob:
         return self._advance(Phase.TRAINING, external_id=external_id)
 
     def trained(self, artifact_ref: str, cost_micro_usd: int = 0) -> FineTuneJob:
-        """Record a finished training run and where its artifact went."""
+        """Record a finished training run and where its artifact went.
+
+        Lands in EVALUATING when the spec names a suite, and in TRAINED — which
+        is terminal — when it does not. An artifact nobody has measured is one
+        an operator promotes deliberately, rather than one the loop promotes
+        because no gate happened to be configured.
+        """
         if not artifact_ref:
             raise InvalidRequestError(
                 f"job {self.ref} finished training with no artifact reference"
             )
         return self._advance(
-            Phase.TRAINED, artifact_ref=artifact_ref, cost_micro_usd=cost_micro_usd
+            Phase.EVALUATING if self.spec.eval_suite else Phase.TRAINED,
+            artifact_ref=artifact_ref,
+            cost_micro_usd=cost_micro_usd,
         )
+
+    def evaluated(
+        self, decision: Decision, scorecard: Scorecard, baseline: Scorecard | None = None
+    ) -> FineTuneJob:
+        """Record the gate's verdict and the numbers behind it.
+
+        The scorecards are kept either way. A failed gate is the case where
+        someone most wants to see what was measured, and discarding it means
+        the only way to find out is to train again.
+        """
+        phase = Phase.READY if decision.passed else Phase.FAILED
+        return self._advance(phase, reason=decision.summary, scorecard=scorecard, baseline=baseline)
 
     def failed(self, reason: str, cost_micro_usd: int | None = None) -> FineTuneJob:
         """Record a terminal failure.
@@ -268,6 +304,8 @@ class FineTuneJob:
         reason: str | None = None,
         cost_micro_usd: int | None = None,
         attempts: int | None = None,
+        scorecard: Scorecard | None = None,
+        baseline: Scorecard | None = None,
     ) -> FineTuneJob:
         """Move to a phase, carrying forward whatever this step does not set.
 
@@ -293,5 +331,7 @@ class FineTuneJob:
                     current.cost_micro_usd if cost_micro_usd is None else cost_micro_usd
                 ),
                 attempts=current.attempts if attempts is None else attempts,
+                scorecard=current.scorecard if scorecard is None else scorecard,
+                baseline=current.baseline if baseline is None else baseline,
             ),
         )

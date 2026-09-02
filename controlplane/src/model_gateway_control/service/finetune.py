@@ -49,7 +49,14 @@ from model_gateway_control.domain.finetune import (
     Spec,
     Status,
 )
+from model_gateway_control.domain.scorecard import (
+    Direction,
+    Metric,
+    PromotionGate,
+    Scorecard,
+)
 from model_gateway_control.errors import ConflictError, InvalidRequestError, NotFoundError
+from model_gateway_control.service.evaluator import EvalPort, Target
 from model_gateway_control.service.trainer import RunState, TrainerPort
 
 logger = logging.getLogger(__name__)
@@ -59,7 +66,7 @@ Clock = Callable[[], datetime]
 
 #: Phases the reconciler has work to do in. Terminal jobs are never claimed,
 #: so a finished job cannot be acted on by a loop that has a bug.
-ACTIONABLE = (Phase.PENDING, Phase.SUBMITTING, Phase.TRAINING)
+ACTIONABLE = (Phase.PENDING, Phase.SUBMITTING, Phase.TRAINING, Phase.EVALUATING)
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +78,37 @@ class Outcome:
     #: job did useful work and changed nothing, and the two read differently in
     #: a log.
     advanced: bool
+
+
+class Evaluators:
+    """The eval suites this control plane can run, by name.
+
+    Resolved by name rather than executed from whatever a tenant supplied: a
+    suite is code that produces numbers a gate then trusts, so one that always
+    returns a perfect score promotes everything. Binding these to the component
+    registry — signed, admitted and sandboxed like any other plugin — is the
+    natural next step and is one change for this and Trainers together.
+    """
+
+    def __init__(self, evaluators: Sequence[EvalPort] = ()) -> None:
+        by_name: dict[str, EvalPort] = {}
+        for evaluator in evaluators:
+            name = evaluator.name()
+            if not name:
+                raise InvalidRequestError("an eval suite reported an empty name")
+            if name in by_name:
+                raise InvalidRequestError(f"two eval suites named {name!r}")
+            by_name[name] = evaluator
+        self._by_name = by_name
+
+    def resolve(self, name: str) -> EvalPort:
+        """The suite registered under this name."""
+        evaluator = self._by_name.get(name)
+        if evaluator is None:
+            raise NotFoundError(
+                f"no eval suite named {name!r} is registered with this control plane"
+            )
+        return evaluator
 
 
 class Trainers:
@@ -112,10 +150,12 @@ class FineTuneService:
         self,
         session: AsyncSession,
         trainers: Trainers | None = None,
+        evaluators: Evaluators | None = None,
         now: Clock | None = None,
     ) -> None:
         self._session = session
         self._trainers = trainers or Trainers()
+        self._evaluators = evaluators or Evaluators()
         self._now = now or _utcnow
 
     async def submit(self, job: FineTuneJob) -> FineTuneJob:
@@ -134,9 +174,12 @@ class FineTuneService:
                 f"job {job.ref} already exists; submit a new job rather than reusing a name"
             )
 
-        # Named before it is trusted: the trainer has to exist now, not when a
-        # reconciler pass discovers it does not two minutes later.
+        # Named before they are trusted: both have to exist now, not when a
+        # reconciler pass discovers they do not two minutes later. A job whose
+        # gate can never run would train — at full cost — and then stall.
         self._trainers.resolve(job.spec.trainer)
+        if job.spec.eval_suite:
+            self._evaluators.resolve(job.spec.eval_suite)
 
         row = models.FineTuneJob(
             tenant_id=job.spec.tenant,
@@ -151,6 +194,8 @@ class FineTuneService:
             hyperparameters=json.dumps(job.spec.hyperparameters, sort_keys=True),
             budget_ref=job.spec.budget_ref,
             eval_suite=job.spec.eval_suite,
+            gate_min_score=job.spec.promotion_gate.min_score,
+            gate_must_not_regress=json.dumps(list(job.spec.promotion_gate.must_not_regress)),
             idempotency_key=job.idempotency_key,
             phase=str(Phase.PENDING),
         )
@@ -217,10 +262,12 @@ class Reconciler:
         self,
         sessions: async_sessionmaker[AsyncSession],
         trainers: Trainers | None = None,
+        evaluators: Evaluators | None = None,
         now: Clock | None = None,
     ) -> None:
         self._sessions = sessions
         self._trainers = trainers or Trainers()
+        self._evaluators = evaluators or Evaluators()
         self._now = now or _utcnow
 
     async def reconcile_once(self) -> list[Outcome]:
@@ -260,7 +307,6 @@ class Reconciler:
 
             job = to_job(row)
             before = job.status.phase
-            trainer = self._trainers.resolve(job.spec.trainer)
 
             if job.status.phase is Phase.PENDING:
                 # Committed before the trainer is called, and that ordering is
@@ -276,7 +322,7 @@ class Reconciler:
                 await session.commit()
 
             try:
-                job = await self._step(trainer, job)
+                job = await self._step(job)
             except Exception as exc:
                 # A trainer that raises must not stop the loop or lose the job.
                 # It stays where it is and the next pass tries again; only the
@@ -290,7 +336,11 @@ class Reconciler:
             await session.commit()
             return Outcome(job=job, advanced=advanced)
 
-    async def _step(self, trainer: TrainerPort, job: FineTuneJob) -> FineTuneJob:
+    async def _step(self, job: FineTuneJob) -> FineTuneJob:
+        if job.status.phase is Phase.EVALUATING:
+            return await self._evaluate(job)
+
+        trainer = self._trainers.resolve(job.spec.trainer)
         if job.status.phase is Phase.SUBMITTING:
             run = await trainer.submit(job.name, job.spec, job.idempotency_key)
             if run.state is RunState.FAILED:
@@ -315,6 +365,30 @@ class Reconciler:
         # meaning could mark a running job terminal, and a terminal job is one
         # nothing will ever collect the artifact from.
         return job
+
+    async def _evaluate(self, job: FineTuneJob) -> FineTuneJob:
+        """Measure the artifact, and the base model if anything must not regress.
+
+        Both in one pass rather than one per pass. An eval run is minutes
+        against a training run's hours, and splitting it would mean carrying a
+        half-finished comparison across a crash — where the risk is not cost
+        but a gate decided against a baseline measured by a different version
+        of the suite.
+        """
+        suite = self._evaluators.resolve(job.spec.eval_suite)
+        gate = job.spec.promotion_gate
+
+        candidate = await suite.run(
+            Target(base_model=job.spec.base_model, artifact_ref=job.status.artifact_ref)
+        )
+        # Only when the gate needs something to compare against: running a
+        # second evaluation for a gate that is purely a minimum score would
+        # double its cost to learn nothing.
+        baseline = (
+            await suite.run(Target(base_model=job.spec.base_model)) if gate.needs_baseline else None
+        )
+
+        return job.evaluated(gate.decide(candidate, baseline), candidate, baseline)
 
 
 async def _needing_work(session: AsyncSession) -> Sequence[models.FineTuneJob]:
@@ -344,7 +418,53 @@ def _apply_status(row: models.FineTuneJob, status: Status, when: datetime) -> No
     row.reason = status.reason
     row.cost_micro_usd = status.cost_micro_usd
     row.attempts = status.attempts
+    row.scorecard = encode_scorecard(status.scorecard)
+    row.baseline = encode_scorecard(status.baseline)
     row.updated_at = when
+
+
+def encode_scorecard(card: Scorecard | None) -> str:
+    """A scorecard as the JSON a row stores. Empty for none."""
+    if card is None:
+        return ""
+    return json.dumps(
+        {
+            "score": card.score,
+            "suite": card.suite,
+            "suite_version": card.suite_version,
+            "metrics": [
+                {
+                    "name": m.name,
+                    "value": m.value,
+                    "direction": str(m.direction),
+                    "unit": m.unit,
+                }
+                for m in card.metrics
+            ],
+        },
+        sort_keys=True,
+    )
+
+
+def decode_scorecard(raw: str) -> Scorecard | None:
+    """A scorecard from what a row stores."""
+    if not raw:
+        return None
+    decoded = json.loads(raw)
+    return Scorecard(
+        score=decoded["score"],
+        suite=decoded.get("suite", ""),
+        suite_version=decoded.get("suite_version", ""),
+        metrics=tuple(
+            Metric(
+                name=m["name"],
+                value=m["value"],
+                direction=Direction(m["direction"]),
+                unit=m.get("unit", ""),
+            )
+            for m in decoded.get("metrics", [])
+        ),
+    )
 
 
 def job_key(job: FineTuneJob) -> tuple[str, str]:
@@ -372,6 +492,10 @@ def to_job(row: models.FineTuneJob) -> FineTuneJob:
             hyperparameters=json.loads(row.hyperparameters or "{}"),
             budget_ref=row.budget_ref,
             eval_suite=row.eval_suite,
+            promotion_gate=PromotionGate(
+                min_score=row.gate_min_score,
+                must_not_regress=tuple(json.loads(row.gate_must_not_regress or "[]")),
+            ),
         ),
         status=Status(
             phase=Phase(row.phase),
@@ -380,6 +504,8 @@ def to_job(row: models.FineTuneJob) -> FineTuneJob:
             reason=row.reason,
             cost_micro_usd=row.cost_micro_usd,
             attempts=row.attempts,
+            scorecard=decode_scorecard(row.scorecard),
+            baseline=decode_scorecard(row.baseline),
             updated_at=row.updated_at,
         ),
     )
@@ -392,6 +518,7 @@ def _utcnow() -> datetime:
 __all__ = [
     "ACTIONABLE",
     "TERMINAL",
+    "Evaluators",
     "FineTuneService",
     "Outcome",
     "Reconciler",

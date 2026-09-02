@@ -23,14 +23,18 @@ from model_gateway_control.db import models
 from model_gateway_control.db.models import Base
 from model_gateway_control.db.session import create_engine, session_factory
 from model_gateway_control.domain.component import manifest_from_dict
+from model_gateway_control.domain.finetune import Spec as FineTuneSpec
 from model_gateway_control.domain.identity import compute_key_lookup
+from model_gateway_control.domain.scorecard import Scorecard
 from model_gateway_control.domain.signing import (
     Policy,
     PublisherKey,
     TrustStore,
     sign,
 )
-from model_gateway_control.service.finetune import Trainers
+from model_gateway_control.service.evaluator import Target
+from model_gateway_control.service.finetune import Evaluators, Trainers
+from model_gateway_control.service.trainer import Run
 from model_gateway_control.wire import snapshot_pb2 as pb
 
 DEFAULT_URL = "sqlite+aiosqlite:///:memory:"
@@ -632,18 +636,36 @@ async def test_registration_still_works_with_no_signing_configured(
 
 
 class StubTrainer:
-    """A trainer the API can resolve. It is never called from these tests."""
+    """A trainer the API can resolve. It is never called from these tests.
+
+    Typed against the real port rather than against ``object``: a stub that
+    does not satisfy TrainerPort would let the API accept a registration the
+    reconciler could never act on.
+    """
 
     def name(self) -> str:
         return "llamafactory-lora"
 
-    async def submit(self, job_name: str, job_spec: object, idempotency_key: str) -> object:
+    async def submit(self, job_name: str, spec: FineTuneSpec, idempotency_key: str) -> Run:
         raise NotImplementedError
 
-    async def poll(self, external_id: str) -> object:
+    async def poll(self, external_id: str) -> Run:
         raise NotImplementedError
 
     async def cancel(self, external_id: str) -> None:
+        raise NotImplementedError
+
+
+class StubEvaluator:
+    """A suite the API can resolve. It is never run from these tests."""
+
+    def name(self) -> str:
+        return "triage-regression-v2"
+
+    def version(self) -> str:
+        return "1.0.0"
+
+    async def run(self, target: Target) -> Scorecard:
         raise NotImplementedError
 
 
@@ -654,7 +676,8 @@ async def training_client(engine: AsyncEngine) -> AsyncIterator[AsyncClient]:
             engine=engine,
             key_pepper=PEPPER,
             admin_token=TOKEN,
-            trainers=Trainers((StubTrainer(),)),  # type: ignore[arg-type]
+            trainers=Trainers((StubTrainer(),)),
+            evaluators=Evaluators((StubEvaluator(),)),
             now=lambda: NOW,
         )
     )
@@ -750,3 +773,36 @@ async def test_cancelling_a_pending_job_settles_it(training_client: AsyncClient)
 
     assert cancelled.status_code == 200
     assert cancelled.json()["status"]["phase"] == "cancelled"
+
+
+async def test_a_gate_is_recorded_on_the_spec_and_comes_back(
+    training_client: AsyncClient,
+) -> None:
+    # The bar is fixed at submission, so lowering it later cannot retroactively
+    # promote something that already failed it. That only holds if it is stored
+    # with the job rather than read from configuration when the gate runs.
+    created = await training_client.post(
+        "/v1/finetune/jobs",
+        json=_job_body(
+            eval_suite="triage-regression-v2",
+            min_score=8_700,
+            must_not_regress=["latency_p95", "refusal_rate"],
+        ),
+    )
+
+    assert created.status_code == 201, created.text
+    gate = created.json()["spec"]["promotion_gate"]
+    assert gate["min_score"] == 8_700
+    assert gate["must_not_regress"] == ["latency_p95", "refusal_rate"]
+    # Nothing has measured it yet.
+    assert created.json()["status"]["scorecard"] is None
+
+
+async def test_a_score_outside_the_basis_point_range_is_refused(
+    training_client: AsyncClient,
+) -> None:
+    # A gate given 0.87 rather than 8700 would pass everything, and a gate
+    # given 87 would pass almost everything. Neither fails loudly at runtime.
+    response = await training_client.post("/v1/finetune/jobs", json=_job_body(min_score=20_000))
+
+    assert response.status_code == 422
