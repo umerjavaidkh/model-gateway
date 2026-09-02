@@ -32,6 +32,16 @@ from model_gateway_control.domain.catalog import (
     RoutingKey,
     TrustTier,
 )
+from model_gateway_control.domain.component import (
+    Admission,
+    Component,
+    Execution,
+    FailureMode,
+    Manifest,
+    Port,
+    Registry,
+    Status,
+)
 from model_gateway_control.domain.identity import BudgetRef, Principal, RateLimit
 from model_gateway_control.domain.policy import PolicyBundle, PolicyEffect, PolicyRule
 from model_gateway_control.domain.tenant import Fleet, PluginBinding, Tenant
@@ -73,9 +83,20 @@ class Repository:
             version=state.version,
             deployments=tuple(_to_deployment(d) for d in deployments),
             aliases=tuple(_to_alias(a) for a in aliases),
+            registry=await self.load_registry(),
             default_plugins=tuple(_to_plugin(p) for p in plugins),
             policy_bundle_ref=state.policy_bundle_ref,
         )
+
+    async def load_registry(self) -> Registry:
+        """Read the component registry the snapshot's bindings are checked against.
+
+        Retired components are loaded too. A snapshot cannot bind one, but the
+        error an operator gets should be "presidio@2.1.0 is retired" rather
+        than "no such component", which sends them looking for a typo.
+        """
+        rows = (await self._session.scalars(select(models.Component))).all()
+        return Registry(tuple(to_component(row) for row in rows))
 
     async def load_tenants(self) -> list[Tenant]:
         """Read every tenant's layer."""
@@ -285,9 +306,60 @@ def _to_alias(row: models.Alias) -> ModelAlias:
     )
 
 
+def to_manifest(row: models.Component) -> Manifest:
+    """Map a component row to the manifest it stores.
+
+    Separate from ``to_component`` because the manifest alone is well defined
+    even when the row is not: an active row whose admission no longer covers
+    its manifest is a corrupt registry, and the registry service needs to read
+    the manifest in order to say so.
+    """
+    return Manifest(
+        name=row.name,
+        version=row.version,
+        port=Port(row.port),
+        config_schema=row.config_schema,
+        latency_budget_ms=row.latency_budget_ms,
+        failure_mode=FailureMode(row.failure_mode),
+        execution=Execution(row.execution),
+        capabilities=tuple(sorted(c.name for c in row.capabilities)),
+        image=row.image,
+    )
+
+
+def to_component(row: models.Component) -> Component:
+    """Map a component row to its domain form, invariants and all.
+
+    Public — unlike its siblings here — because the registry service needs the
+    same mapping, and a second copy of it is how a status or a digest ends up
+    interpreted two different ways.
+    """
+    # The latest run is the current admission; earlier ones are history. Rows
+    # are ordered by id in the relationship, so this does not depend on the
+    # database returning them in insertion order.
+    latest = row.admissions[-1] if row.admissions else None
+    return Component(
+        manifest=to_manifest(row),
+        status=Status(row.status),
+        admission=_to_admission(latest) if latest is not None else None,
+    )
+
+
+def _to_admission(row: models.ComponentAdmission) -> Admission:
+    return Admission(
+        suite=Port(row.suite),
+        suite_version=row.suite_version,
+        manifest_digest=row.manifest_digest,
+        passed=row.passed,
+        runner=row.runner,
+        evidence_ref=row.evidence_ref,
+        recorded_at=row.recorded_at,
+    )
+
+
 def _to_plugin(row: models.PluginBinding) -> PluginBinding:
     return PluginBinding(
-        port=row.port,
+        port=Port(row.port),
         component=row.component,
         version=row.version,
         config_ref=row.config_ref,

@@ -14,7 +14,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from model_gateway_control.api.app import AdminSettings, create_app
 from model_gateway_control.db import models
@@ -30,28 +30,37 @@ NOW = datetime(2026, 9, 1, 12, 0, 0, tzinfo=UTC)
 
 
 @pytest_asyncio.fixture
-async def client() -> AsyncIterator[AsyncClient]:
-    """An API client over a freshly created schema, seeded with one tenant."""
+async def engine() -> AsyncIterator[AsyncEngine]:
+    """A freshly created schema, seeded with one tenant.
+
+    Separate from ``client`` so a test can reach the same database directly —
+    in-memory SQLite gives each engine its own database, so a second one built
+    from the same URL would silently be a different world.
+    """
     engine = create_engine(os.environ.get("GATEWAY_TEST_DATABASE_URL", DEFAULT_URL))
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.drop_all)
         await connection.run_sync(Base.metadata.create_all)
 
-    factory = session_factory(engine)
-    async with factory() as session:
+    async with session_factory(engine)() as session:
         await _seed(session)
 
+    yield engine
+    await engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def client(engine: AsyncEngine) -> AsyncIterator[AsyncClient]:
+    """An API client over that schema."""
     app = create_app(
         AdminSettings(engine=engine, key_pepper=PEPPER, admin_token=TOKEN, now=lambda: NOW)
     )
-    transport = ASGITransport(app=app)
     async with AsyncClient(
-        transport=transport,
+        transport=ASGITransport(app=app),
         base_url="http://admin",
         headers={"Authorization": f"Bearer {TOKEN}"},
     ) as client:
         yield client
-    await engine.dispose()
 
 
 async def _seed(session: AsyncSession) -> None:
@@ -365,3 +374,143 @@ async def test_a_negative_limit_is_rejected(client: AsyncClient) -> None:
         json={"key_id": "key-1", "application_id": "app-1", "requests_per_minute": -1},
     )
     assert response.status_code == 422
+
+
+# --- component registry -----------------------------------------------------
+
+COMPONENT = {
+    "name": "presidio",
+    "version": "2.1.0",
+    "port": "guardrail",
+    "latency_budget_ms": 200,
+    "failure_mode": "open",
+    "execution": "sidecar",
+    "capabilities": ["network"],
+}
+
+
+async def test_a_registered_component_is_pending_until_a_run_admits_it(
+    client: AsyncClient,
+) -> None:
+    created = await client.post("/v1/components", json=COMPONENT)
+    assert created.status_code == 201
+    body = created.json()
+
+    assert body["status"] == "pending"
+    assert len(body["digest"]) == 64
+    assert body["admission"] is None
+
+
+async def test_recording_a_passing_run_activates_the_component(client: AsyncClient) -> None:
+    digest = (await client.post("/v1/components", json=COMPONENT)).json()["digest"]
+
+    admitted = await client.post(
+        "/v1/components/presidio/2.1.0/admissions",
+        json={
+            "suite": "guardrail",
+            "suite_version": "3",
+            "manifest_digest": digest,
+            "passed": True,
+            "runner": "sandbox://ephemeral",
+            "evidence_ref": "s3://runs/42",
+        },
+    )
+
+    assert admitted.status_code == 200
+    body = admitted.json()
+    assert body["status"] == "active"
+    assert body["admission"]["runner"] == "sandbox://ephemeral"
+    assert body["admission"]["suite_version"] == "3"
+
+
+async def test_a_run_against_a_different_manifest_is_rejected(client: AsyncClient) -> None:
+    # The runner reports; it does not decide. A verdict that covers other bytes
+    # would admit an artifact nothing tested.
+    await client.post("/v1/components", json=COMPONENT)
+
+    conflict = await client.post(
+        "/v1/components/presidio/2.1.0/admissions",
+        json={
+            "suite": "guardrail",
+            "suite_version": "3",
+            "manifest_digest": "0" * 64,
+            "passed": True,
+            "runner": "sandbox://ephemeral",
+        },
+    )
+
+    assert conflict.status_code == 409
+
+
+async def test_republishing_a_version_is_a_conflict(client: AsyncClient) -> None:
+    await client.post("/v1/components", json=COMPONENT)
+    again = await client.post("/v1/components", json=COMPONENT)
+
+    assert again.status_code == 409
+
+
+async def test_a_manifest_that_could_never_be_bound_is_rejected_at_the_door(
+    client: AsyncClient,
+) -> None:
+    # A request-path component with no declared budget, and an image pinned by
+    # a floating tag. Both are refused before anything is stored.
+    no_budget = await client.post("/v1/components", json=COMPONENT | {"latency_budget_ms": 0})
+    assert no_budget.status_code == 400
+
+    floating = await client.post(
+        "/v1/components", json=COMPONENT | {"image": "ghcr.io/acme/presidio:latest"}
+    )
+    assert floating.status_code == 400
+
+
+async def test_retiring_leaves_the_record_and_stops_binding(client: AsyncClient) -> None:
+    await client.post("/v1/components", json=COMPONENT)
+    retired = await client.delete("/v1/components/presidio/2.1.0")
+
+    assert retired.status_code == 200
+    assert retired.json()["status"] == "retired"
+    # Not a deletion: what was once bindable stays answerable.
+    assert (await client.get("/v1/components/presidio/2.1.0")).json()["status"] == "retired"
+
+
+async def test_components_can_be_listed_by_port(client: AsyncClient) -> None:
+    await client.post("/v1/components", json=COMPONENT)
+    await client.post(
+        "/v1/components",
+        json={"name": "llamafactory", "version": "0.9.0", "port": "trainer"},
+    )
+
+    guardrails = (await client.get("/v1/components", params={"port": "guardrail"})).json()
+    assert [c["name"] for c in guardrails["components"]] == ["presidio"]
+
+    every = (await client.get("/v1/components")).json()
+    assert {c["name"] for c in every["components"]} == {"presidio", "llamafactory"}
+
+
+async def test_the_registry_endpoints_require_the_admin_token(client: AsyncClient) -> None:
+    # The registry decides what code the fleet will run. An unauthenticated
+    # write to it is the whole "nice admin UI" failure in one request.
+    for method, path in (
+        ("POST", "/v1/components"),
+        ("GET", "/v1/components"),
+        ("DELETE", "/v1/components/presidio/2.1.0"),
+        ("POST", "/v1/components/presidio/2.1.0/admissions"),
+    ):
+        response = await client.request(method, path, json=COMPONENT, headers={"Authorization": ""})
+        assert response.status_code == 401, f"{method} {path}"
+
+
+async def test_a_snapshot_cannot_bind_a_component_that_was_never_admitted(
+    client: AsyncClient, engine: AsyncEngine
+) -> None:
+    # The end of the chain: registration alone must not reach a worker. This is
+    # the same refusal the builder makes, seen through the API an operator uses.
+    await client.post("/v1/components", json=COMPONENT)
+    async with session_factory(engine)() as session:
+        session.add(models.PluginBinding(tenant_id=None, port="guardrail", component="presidio"))
+        await session.commit()
+
+    refused = await client.post("/v1/snapshots")
+
+    assert refused.status_code == 400
+    assert "presidio" in refused.json()["error"]["message"]

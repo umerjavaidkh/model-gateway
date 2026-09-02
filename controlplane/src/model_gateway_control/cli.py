@@ -25,6 +25,13 @@ from model_gateway_control.domain.catalog import (
     RoutingKey,
     TrustTier,
 )
+from model_gateway_control.domain.component import (
+    Component,
+    Port,
+    Registry,
+    admitted,
+    manifest_from_dict,
+)
 from model_gateway_control.domain.identity import BudgetRef, Principal, RateLimit, issue_key
 from model_gateway_control.domain.policy import PolicyBundle, PolicyEffect, PolicyRule
 from model_gateway_control.domain.tenant import (
@@ -48,12 +55,33 @@ def main(argv: Sequence[str] | None = None) -> int:
     build.add_argument("--out", type=Path, required=True, help="file to write")
     build.add_argument("--pepper", required=True, help="key pepper; must match the data plane")
 
+    digest = sub.add_parser(
+        "component-digest", help="validate a component manifest and print its digest"
+    )
+    digest.add_argument("--manifest", type=Path, required=True, help="JSON manifest")
+
     args = parser.parse_args(argv)
     try:
+        if args.command == "component-digest":
+            return _component_digest(args.manifest)
         return _build_snapshot(args.config, args.out, args.pepper)
     except GatewayError as err:
         print(f"gatewayctl: {err}", file=sys.stderr)
         return 1
+
+
+def _component_digest(manifest_path: Path) -> int:
+    """Validate a manifest locally and print what an admission must bind to.
+
+    A publisher needs both before submitting: the validation so the API's
+    rejection is not the first feedback they get, and the digest because a
+    contract-suite runner has to say which manifest it examined and cannot
+    compute that from a name and a version.
+    """
+    manifest = manifest_from_dict(json.loads(manifest_path.read_text()))
+    print(manifest.digest())
+    print(f"  {manifest.ref} fills {manifest.port}, {manifest.execution}", file=sys.stderr)
+    return 0
 
 
 def _build_snapshot(config_path: Path, out: Path, pepper: str) -> int:
@@ -86,6 +114,7 @@ def _parse_fleet(raw: dict[str, Any]) -> Fleet:
             ModelAlias(name=a["name"], targets=tuple(_parse_route(t) for t in a["targets"]))
             for a in raw.get("aliases", [])
         ),
+        registry=_parse_registry(raw.get("registry", [])),
         default_plugins=tuple(_parse_plugin(p) for p in raw.get("default_plugins", [])),
         default_guardrails=tuple(_parse_guardrail(g) for g in raw.get("default_guardrails", [])),
         default_policy=_parse_policy(raw.get("default_policy")),
@@ -126,9 +155,38 @@ def _parse_trust_tier(name: str) -> TrustTier:
         raise InvalidRequestError(f"unknown trust tier {name!r}") from None
 
 
+def _parse_registry(raw: list[dict[str, Any]]) -> Registry:
+    """Read the component registry a config file declares.
+
+    A file may state that a component was admitted, and the admission binds to
+    the manifest written beside it. That is not a hole in the gate: this path
+    is an operator compiling a snapshot from a local file they already control,
+    and it is how components compiled into the worker are registered at all —
+    their suite runs in this repository's CI, not in a sandbox at request time.
+    The gate governs the API, where the submitter is not the operator.
+    """
+    components = []
+    for entry in raw:
+        record = entry.get("admission")
+        manifest = manifest_from_dict({k: v for k, v in entry.items() if k != "admission"})
+        if record is None:
+            components.append(Component(manifest=manifest))
+            continue
+        components.append(
+            admitted(
+                manifest,
+                suite_version=str(record["suite_version"]),
+                runner=str(record["runner"]),
+                evidence_ref=str(record.get("evidence_ref", "")),
+                passed=bool(record.get("passed", True)),
+            )
+        )
+    return Registry(tuple(components))
+
+
 def _parse_plugin(raw: dict[str, Any]) -> PluginBinding:
     return PluginBinding(
-        port=raw["port"],
+        port=Port(raw["port"]),
         component=raw["component"],
         version=raw.get("version", ""),
         config_ref=raw.get("config_ref", ""),

@@ -3,33 +3,41 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import StrEnum
 
 from model_gateway_control.domain.budget import Budget
 from model_gateway_control.domain.catalog import Deployment, ModelAlias, TrustTier
+
+# FailureMode and Port belong to the extension surface, so they are defined
+# with the registry that governs it rather than duplicated here. A binding and
+# the manifest it names have to agree about both, and two definitions of the
+# same enum is how they stop agreeing.
+from model_gateway_control.domain.component import FailureMode, Port, Registry
 from model_gateway_control.domain.identity import Principal
 from model_gateway_control.domain.policy import PolicyBundle
 from model_gateway_control.errors import InvalidRequestError
 
+__all__ = [
+    "FailureMode",
+    "Fleet",
+    "GuardrailBinding",
+    "PluginBinding",
+    "Port",
+    "Tenant",
+]
+
 
 @dataclass(frozen=True, slots=True)
 class PluginBinding:
-    """Which registry component fills a port, at which version."""
+    """Which registry component fills a port, at which version.
 
-    port: str
+    An empty version means "the one bindable version", which the registry
+    resolves at snapshot build time and refuses when it is ambiguous.
+    """
+
+    port: Port
     component: str
     version: str = ""
     config_ref: str = ""
-
-
-class FailureMode(StrEnum):
-    """What to do when a guardrail errors or exceeds its budget."""
-
-    #: Allow the request. For detection that is useful but not authoritative.
-    OPEN = "open"
-    #: Refuse the request. For controls whose failure is not recoverable — a
-    #: leaked credential cannot be un-leaked.
-    CLOSED = "closed"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -115,6 +123,11 @@ class Fleet:
     version: int = 1
     deployments: tuple[Deployment, ...] = ()
     aliases: tuple[ModelAlias, ...] = ()
+    #: The admitted component set every binding in this snapshot is checked
+    #: against. Carried on the fleet rather than looked up during the build so
+    #: that a snapshot is a pure function of its inputs: two builds from the
+    #: same fleet produce the same bytes, whatever the registry does meanwhile.
+    registry: Registry = field(default_factory=Registry)
     default_plugins: tuple[PluginBinding, ...] = ()
     #: Guardrails applied to any tenant declaring none of its own.
     default_guardrails: tuple[GuardrailBinding, ...] = ()

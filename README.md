@@ -46,7 +46,7 @@ controlplane/       Python. Registry, identity, policy authoring, snapshot compi
   db/                 SQLAlchemy models, Alembic migrations, the repository.
   snapshot/builder.py Domain -> the versioned artifact the data plane serves.
   wire/               Generated protobuf, shared with the data plane.
-  service/            Key lifecycle and accounting. Testable without HTTP.
+  service/            Key lifecycle, accounting, and the component registry.
   api/                The admin API. Translation only.
   cli.py              gatewayctl.
 sidecars/pii-ner/   Python. Statistical PII detection, reached over a Unix socket.
@@ -170,5 +170,6 @@ decided and why.
 | M8b — Policy engine: compiled decision table, geo and IP rules | **done** |
 | M9a — PII chain: detection, redact/hash/tokenize, streaming restoration | **done** |
 | M9b — NER sidecar for names, locations and organisations | **done** |
-| M10 — Component registry | next |
+| M10a — Component registry: manifests, admission records, binding gate | **done** |
+| M10b — Sandboxed contract-test runner | next |
 | M11+ — Fine-tuning | |

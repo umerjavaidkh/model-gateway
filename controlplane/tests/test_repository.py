@@ -25,6 +25,7 @@ from model_gateway_control.db.repository import Repository
 from model_gateway_control.db.session import create_engine, session_factory
 from model_gateway_control.domain.budget import BudgetScope
 from model_gateway_control.domain.catalog import Capability, TrustTier
+from model_gateway_control.domain.component import Manifest, Port, Status
 from model_gateway_control.errors import NotFoundError
 from model_gateway_control.snapshot import build_snapshot
 
@@ -54,6 +55,29 @@ async def session() -> AsyncIterator[AsyncSession]:
     async with factory() as session:
         yield session
     await engine.dispose()
+
+
+def _admitted_guardrail(name: str, version: str = "1.0.0") -> models.Component:
+    """A component row that has passed its suite, as the registry would hold it."""
+    manifest = Manifest(name=name, version=version, port=Port.GUARDRAIL, latency_budget_ms=50)
+    row = models.Component(
+        name=name,
+        version=version,
+        port=str(Port.GUARDRAIL),
+        status=str(Status.ACTIVE),
+        manifest_digest=manifest.digest(),
+        latency_budget_ms=50,
+    )
+    row.admissions = [
+        models.ComponentAdmission(
+            suite=str(Port.GUARDRAIL),
+            suite_version="1",
+            manifest_digest=manifest.digest(),
+            passed=True,
+            runner="test",
+        )
+    ]
+    return row
 
 
 async def seed(session: AsyncSession) -> None:
@@ -116,6 +140,10 @@ async def seed(session: AsyncSession) -> None:
     ]
     session.add(tenant_alias)
 
+    # A binding only compiles if the registry vouches for what it names, so
+    # the components come first — the same order an operator has to follow.
+    for name in ("regex-pii", "presidio"):
+        session.add(_admitted_guardrail(name))
     session.add(models.PluginBinding(tenant_id=None, port="guardrail", component="regex-pii"))
     session.add(models.PluginBinding(tenant_id="acme", port="guardrail", component="presidio"))
 
