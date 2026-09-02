@@ -121,6 +121,17 @@ local-up: ## Build and start the whole fleet in Linux containers, migrated and s
 	@echo
 	@echo "  make local-smoke   to prove it works"
 
+.PHONY: local-qwen
+local-qwen: ## Add a real Qwen model to the local fleet and register it
+	docker compose -f deploy/local/compose.yaml --profile model up -d ollama
+	@echo "  pulling qwen2.5:0.5b (a few hundred MB, once)"
+	@docker compose -f deploy/local/compose.yaml exec -T ollama ollama pull qwen2.5:0.5b
+	@./deploy/local/register-qwen.sh
+
+.PHONY: brain-demo
+brain-demo: ## Prove the brain seam end to end against the real model
+	./deploy/local/brain-demo.sh
+
 .PHONY: local-smoke
 local-smoke: ## Assert the local fleet behaves like a fleet
 	./deploy/local/smoke.sh

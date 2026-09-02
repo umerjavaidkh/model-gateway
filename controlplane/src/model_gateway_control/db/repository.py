@@ -299,11 +299,32 @@ class Repository:
 
         return PolicyBundle(
             id=tenant_id or "fleet",
-            rules=tuple(_to_policy_rule(row) for row in rows),
+            rules=tuple(to_policy_rule(row) for row in rows),
         )
 
 
-def _to_policy_rule(row: models.PolicyRule) -> PolicyRule:
+#: Which rule field each condition kind carries, in one place.
+#:
+#: Both directions read this. They were written separately once, with the
+#: writer storing "models" and the reader looking for "model", so every model
+#: condition was stored and then silently dropped — a policy that named a model
+#: matched every model instead. One mapping is the fix; two mappings of one
+#: thing is the bug.
+POLICY_CONDITION_KINDS = {
+    "model": "models",
+    "endpoint": "endpoints",
+    "role": "roles",
+    "region": "regions",
+    "cidr": "source_cidrs",
+}
+
+
+def to_policy_rule(row: models.PolicyRule) -> PolicyRule:
+    """Map a stored rule to its domain form.
+
+    Public because writing rules needs the same mapping read back, and a second
+    copy of it is exactly how the two came to disagree.
+    """
     by_kind: dict[str, list[str]] = {}
     for condition in row.conditions:
         by_kind.setdefault(condition.kind, []).append(condition.value)

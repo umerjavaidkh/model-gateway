@@ -39,6 +39,7 @@ from model_gateway_control.domain.finetune import (
 )
 from model_gateway_control.domain.finetune import Spec as FineTuneSpec
 from model_gateway_control.domain.identity import RateLimit
+from model_gateway_control.domain.policy import PolicyBundle, PolicyEffect, PolicyRule
 from model_gateway_control.domain.scorecard import BASIS_POINTS, PromotionGate, Scorecard
 from model_gateway_control.domain.signing import Signature, TrustStore
 from model_gateway_control.errors import (
@@ -50,6 +51,7 @@ from model_gateway_control.errors import (
 )
 from model_gateway_control.service.finetune import Evaluators, FineTuneService, Trainers
 from model_gateway_control.service.keys import KeyService
+from model_gateway_control.service.policy import PolicyService
 from model_gateway_control.service.registry import RegistryService
 from model_gateway_control.snapshot import build_snapshot
 
@@ -417,6 +419,38 @@ def create_app(settings: AdminSettings) -> FastAPI:
         await session.commit()
         return _json_response(status.HTTP_200_OK, _job_json(job))
 
+    # --- policy -----------------------------------------------------------
+    #
+    # The gateway evaluates policy; it does not decide what it should be. This
+    # is where an external authority — a compliance engine, an operator, an
+    # agent — publishes that decision. Workers compile it into their next
+    # snapshot and evaluate it locally, so a rule costs nothing per request and
+    # the authority being unreachable freezes policy rather than stopping
+    # traffic.
+
+    @app.put("/v1/policy", dependencies=[Authorized])
+    async def put_fleet_policy(body: PutPolicyRequest, session: Session) -> Response:
+        bundle = await PolicyService(session).replace(None, [r.to_rule() for r in body.rules])
+        await session.commit()
+        return _json_response(status.HTTP_200_OK, _policy_json(bundle))
+
+    @app.get("/v1/policy", dependencies=[Authorized])
+    async def get_fleet_policy(session: Session) -> Response:
+        return _json_response(
+            status.HTTP_200_OK, _policy_json(await PolicyService(session).get(None))
+        )
+
+    @app.put("/v1/tenants/{tenant}/policy", dependencies=[Authorized])
+    async def put_tenant_policy(tenant: str, body: PutPolicyRequest, session: Session) -> Response:
+        bundle = await PolicyService(session).replace(tenant, [r.to_rule() for r in body.rules])
+        await session.commit()
+        return _json_response(status.HTTP_200_OK, _policy_json(bundle))
+
+    @app.get("/v1/tenants/{tenant}/policy", dependencies=[Authorized])
+    async def get_tenant_policy(tenant: str, session: Session) -> Response:
+        bundle = await PolicyService(session).get(tenant)
+        return _json_response(status.HTTP_200_OK, _policy_json(bundle))
+
     @app.get("/v1/components", dependencies=[Authorized])
     async def list_components(session: Session, port: Port | None = None) -> Response:
         components = await RegistryService(session).list(port)
@@ -503,6 +537,74 @@ def create_app(settings: AdminSettings) -> FastAPI:
         )
 
     return app
+
+
+class PolicyRuleRequest(BaseModel):
+    """One rule, as an external authority publishes it."""
+
+    id: str = Field(min_length=1, max_length=64)
+    effect: PolicyEffect
+    models: list[str] = Field(default_factory=list)
+    endpoints: list[str] = Field(default_factory=list)
+    roles: list[str] = Field(default_factory=list)
+    regions: list[str] = Field(default_factory=list)
+    source_cidrs: list[str] = Field(default_factory=list)
+    max_payload_bytes: int = Field(default=0, ge=0)
+    data_class: str = ""
+    min_trust_tier: TrustTier = TrustTier.UNSET
+    #: Returned to the caller on a denial, so it must be safe to disclose.
+    reason: str = ""
+
+    def to_rule(self) -> PolicyRule:
+        return PolicyRule(
+            id=self.id,
+            effect=self.effect,
+            models=tuple(self.models),
+            endpoints=tuple(self.endpoints),
+            roles=tuple(self.roles),
+            regions=tuple(self.regions),
+            source_cidrs=tuple(self.source_cidrs),
+            max_payload_bytes=self.max_payload_bytes,
+            data_class=self.data_class,
+            min_trust_tier=self.min_trust_tier,
+            reason=self.reason,
+        )
+
+
+class PutPolicyRequest(BaseModel):
+    """A whole rule set, in evaluation order.
+
+    Whole rather than a patch: an authority restating its current position
+    should be able to send that position without first working out what it said
+    last time. It also makes a retry free, which matters when the publisher is
+    a program that may crash mid-publish.
+    """
+
+    rules: list[PolicyRuleRequest] = Field(default_factory=list)
+
+
+def _policy_json(bundle: PolicyBundle) -> dict[str, Any]:
+    return {
+        "id": bundle.id,
+        # Order is the whole of the conflict resolution — first match wins — so
+        # it is returned as a list and never as a set.
+        "rules": [
+            {
+                "id": rule.id,
+                "effect": str(rule.effect),
+                "models": list(rule.models),
+                "endpoints": list(rule.endpoints),
+                "roles": list(rule.roles),
+                "regions": list(rule.regions),
+                "source_cidrs": list(rule.source_cidrs),
+                "max_payload_bytes": rule.max_payload_bytes,
+                "data_class": rule.data_class,
+                "min_trust_tier": int(rule.min_trust_tier),
+                "reason": rule.reason,
+            }
+            for rule in bundle.rules
+        ],
+    }
 
 
 class SubmitFineTuneJobRequest(BaseModel):
