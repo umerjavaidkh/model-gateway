@@ -16,7 +16,6 @@ generated protobuf.
 
 from __future__ import annotations
 
-import os
 import pathlib
 import re
 import subprocess
@@ -125,17 +124,26 @@ def modules_table() -> str:
 
 def env_vars() -> list[tuple[str, str]]:
     """Environment variables the binaries read."""
-    found: dict[str, str] = {}
-    for path in list((ROOT / "dataplane").rglob("*.go")) + list(
+    # Every reader, not the first one found. A variable read in four places
+    # attributed to one of them reads as "this is where it is configured",
+    # which is exactly the wrong impression for something like the database URL.
+    found: dict[str, set[str]] = {}
+    # Sorted, because rglob returns filesystem order and a variable read in two
+    # files would otherwise be attributed to whichever the machine happened to
+    # walk first. That made this file differ between a laptop and CI by one
+    # line, which is exactly the drift the check exists to catch — pointed at
+    # the generator rather than at anyone's edit.
+    sources = sorted((ROOT / "dataplane").rglob("*.go")) + sorted(
         (ROOT / "controlplane" / "src").rglob("*.py")
-    ):
+    )
+    for path in sources:
         if path.name.endswith("_test.go") or "/tests/" in str(path):
             continue
-        for name in re.findall(r'(?:getenv|environ\.get)\(\s*"(GATEWAY_[A-Z_]+)"', path.read_text()):
-            found.setdefault(name, str(path.relative_to(ROOT)))
-        for name in re.findall(r'os\.environ\[\s*"(GATEWAY_[A-Z_]+)"\s*\]', path.read_text()):
-            found.setdefault(name, str(path.relative_to(ROOT)))
-    return sorted(found.items())
+        text = path.read_text()
+        pattern = r'(?:getenv|environ\.get)\(\s*"(GATEWAY_[A-Z_]+)"|os\.environ\[\s*"(GATEWAY_[A-Z_]+)"\s*\]'
+        for direct, indexed in re.findall(pattern, text):
+            found.setdefault(direct or indexed, set()).add(path.name)
+    return [(name, ", ".join(sorted(files))) for name, files in sorted(found.items())]
 
 
 def main() -> int:

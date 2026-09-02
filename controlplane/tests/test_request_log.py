@@ -172,7 +172,8 @@ async def test_one_request_can_be_fetched_by_id(session: AsyncSession) -> None:
     session.add(record("wanted"))
     await session.flush()
 
-    assert (await RequestLog(session).get("wanted")).request_id == "wanted"
+    wanted = await RequestLog(session).get("wanted")
+    assert wanted.request_id == "wanted"
 
     with pytest.raises(NotFoundError, match="no request"):
         await RequestLog(session).get("never-happened")

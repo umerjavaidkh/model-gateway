@@ -161,28 +161,28 @@ endpoint goes missing from a list like this.
 
 | Variable | Read by |
 |---|---|
-| `GATEWAY_ADMIN_HOST` | `controlplane/src/model_gateway_control/admin_main.py` |
-| `GATEWAY_ADMIN_PORT` | `controlplane/src/model_gateway_control/admin_main.py` |
-| `GATEWAY_ADMIN_TOKEN` | `controlplane/src/model_gateway_control/admin_main.py` |
-| `GATEWAY_CONSUMER_NAME` | `controlplane/src/model_gateway_control/accounting_main.py` |
-| `GATEWAY_CONTROL_PLANE_TOKEN` | `dataplane/internal/config/config.go` |
-| `GATEWAY_CONTROL_PLANE_URL` | `dataplane/internal/config/config.go` |
-| `GATEWAY_DATABASE_URL` | `controlplane/src/model_gateway_control/finetune_main.py` |
-| `GATEWAY_FINETUNE_INTERVAL` | `controlplane/src/model_gateway_control/finetune_main.py` |
-| `GATEWAY_KEY_PEPPER` | `dataplane/internal/config/config.go` |
-| `GATEWAY_LISTEN_ADDR` | `dataplane/internal/config/config.go` |
-| `GATEWAY_NER_SOCKET` | `dataplane/internal/config/config.go` |
-| `GATEWAY_OTLP_ENDPOINT` | `dataplane/internal/config/config.go` |
-| `GATEWAY_OTLP_INSECURE` | `dataplane/internal/config/config.go` |
-| `GATEWAY_REDIS_URL` | `dataplane/internal/config/config.go` |
-| `GATEWAY_REGION` | `dataplane/internal/config/config.go` |
-| `GATEWAY_ROLLOUT_AUTOMATIC` | `controlplane/src/model_gateway_control/finetune_main.py` |
-| `GATEWAY_SIGNATURE_POLICY` | `controlplane/src/model_gateway_control/admin_main.py` |
-| `GATEWAY_SNAPSHOT_FILE` | `dataplane/internal/config/config.go` |
-| `GATEWAY_SNAPSHOT_INTERVAL` | `dataplane/internal/config/config.go` |
-| `GATEWAY_TRACE_SAMPLE_RATIO` | `dataplane/internal/config/config.go` |
-| `GATEWAY_TRUSTED_KEYS` | `controlplane/src/model_gateway_control/admin_main.py` |
-| `GATEWAY_WASM_DIR` | `dataplane/internal/config/config.go` |
+| `GATEWAY_ADMIN_HOST` | `admin_main.py` |
+| `GATEWAY_ADMIN_PORT` | `admin_main.py` |
+| `GATEWAY_ADMIN_TOKEN` | `admin_main.py` |
+| `GATEWAY_CONSUMER_NAME` | `accounting_main.py` |
+| `GATEWAY_CONTROL_PLANE_TOKEN` | `config.go` |
+| `GATEWAY_CONTROL_PLANE_URL` | `config.go` |
+| `GATEWAY_DATABASE_URL` | `accounting_main.py, admin_main.py, env.py, finetune_main.py` |
+| `GATEWAY_FINETUNE_INTERVAL` | `finetune_main.py` |
+| `GATEWAY_KEY_PEPPER` | `admin_main.py, config.go` |
+| `GATEWAY_LISTEN_ADDR` | `config.go` |
+| `GATEWAY_NER_SOCKET` | `config.go` |
+| `GATEWAY_OTLP_ENDPOINT` | `config.go` |
+| `GATEWAY_OTLP_INSECURE` | `config.go` |
+| `GATEWAY_REDIS_URL` | `accounting_main.py, config.go` |
+| `GATEWAY_REGION` | `config.go` |
+| `GATEWAY_ROLLOUT_AUTOMATIC` | `finetune_main.py` |
+| `GATEWAY_SIGNATURE_POLICY` | `admin_main.py` |
+| `GATEWAY_SNAPSHOT_FILE` | `config.go` |
+| `GATEWAY_SNAPSHOT_INTERVAL` | `config.go` |
+| `GATEWAY_TRACE_SAMPLE_RATIO` | `config.go` |
+| `GATEWAY_TRUSTED_KEYS` | `admin_main.py` |
+| `GATEWAY_WASM_DIR` | `config.go` |
 
 ## Decisions
 

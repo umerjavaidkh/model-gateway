@@ -141,4 +141,5 @@ async def test_an_empty_rule_set_withdraws_every_rule(session: AsyncSession) -> 
 
     await service.replace(None, [])
 
-    assert (await service.get(None)).rules == ()
+    withdrawn = await service.get(None)
+    assert withdrawn.rules == ()

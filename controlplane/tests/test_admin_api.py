@@ -484,7 +484,8 @@ async def test_retiring_leaves_the_record_and_stops_binding(client: AsyncClient)
     assert retired.status_code == 200
     assert retired.json()["status"] == "retired"
     # Not a deletion: what was once bindable stays answerable.
-    assert (await client.get("/v1/components/presidio/2.1.0")).json()["status"] == "retired"
+    fetched = await client.get("/v1/components/presidio/2.1.0")
+    assert fetched.json()["status"] == "retired"
 
 
 async def test_components_can_be_listed_by_port(client: AsyncClient) -> None:
@@ -759,7 +760,8 @@ async def test_a_dataset_without_a_checksum_is_refused(training_client: AsyncCli
 async def test_resubmitting_the_same_job_name_is_a_conflict(
     training_client: AsyncClient,
 ) -> None:
-    assert (await training_client.post("/v1/finetune/jobs", json=_job_body())).status_code == 201
+    created = await training_client.post("/v1/finetune/jobs", json=_job_body())
+    assert created.status_code == 201
 
     response = await training_client.post("/v1/finetune/jobs", json=_job_body())
 
@@ -911,9 +913,16 @@ async def test_a_deployment_without_a_trust_tier_is_refused(client: AsyncClient)
 async def test_a_deployment_can_be_removed(client: AsyncClient) -> None:
     await client.put("/v1/deployments/qwen-1", json=_deployment_body())
 
-    assert (await client.delete("/v1/deployments/qwen-1")).status_code == 204
-    assert (await client.get("/v1/deployments")).json()["deployments"] == []
-    assert (await client.delete("/v1/deployments/qwen-1")).status_code == 404
+    # Bound first, never called inside an assert: python -O strips assertions,
+    # and the request would go with them.
+    deleted = await client.delete("/v1/deployments/qwen-1")
+    assert deleted.status_code == 204
+
+    listed = await client.get("/v1/deployments")
+    assert listed.json()["deployments"] == []
+
+    again = await client.delete("/v1/deployments/qwen-1")
+    assert again.status_code == 404
 
 
 async def test_a_tenant_arrives_with_somewhere_to_hang_a_key(client: AsyncClient) -> None:
@@ -971,7 +980,8 @@ async def test_an_alias_points_at_models_in_order(client: AsyncClient) -> None:
 
 
 async def test_an_alias_with_no_targets_is_refused(client: AsyncClient) -> None:
-    assert (await client.put("/v1/aliases/fast", json={"targets": []})).status_code == 422
+    empty = await client.put("/v1/aliases/fast", json={"targets": []})
+    assert empty.status_code == 422
 
 
 # --- the traffic dashboard --------------------------------------------------
@@ -988,7 +998,8 @@ async def test_requests_are_readable_through_the_api(client: AsyncClient) -> Non
 
 
 async def test_an_unknown_request_is_a_404(client: AsyncClient) -> None:
-    assert (await client.get("/v1/requests/never-happened")).status_code == 404
+    missing = await client.get("/v1/requests/never-happened")
+    assert missing.status_code == 404
 
 
 async def test_reading_traffic_needs_the_admin_token(engine: AsyncEngine) -> None:
@@ -996,7 +1007,8 @@ async def test_reading_traffic_needs_the_admin_token(engine: AsyncEngine) -> Non
     # the dashboard a way to read other people's usage.
     app = create_app(AdminSettings(engine=engine, key_pepper=PEPPER, admin_token=TOKEN))
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://admin") as anonymous:
-        assert (await anonymous.get("/v1/requests")).status_code == 401
+        refused = await anonymous.get("/v1/requests")
+    assert refused.status_code == 401
 
 
 async def test_the_dashboard_page_carries_no_credential(engine: AsyncEngine) -> None:
