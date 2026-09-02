@@ -180,5 +180,5 @@ decided and why.
 | M10c — WASM in-process components | **done** |
 | M10d — Signed manifests | **done** |
 | M11a — Fine-tuning: TrainerPort, FineTuneJob reconciler | **done** |
-| M11b — Eval gate: EvalPort, scorecards, promotion | next |
-| M11c — Weighted rollout: shadow, canary, multi-LoRA routing | |
+| M11b — Eval gate: EvalPort, scorecards, promotion gate | **done** |
+| M11c — Weighted rollout: shadow, canary, multi-LoRA routing | next |

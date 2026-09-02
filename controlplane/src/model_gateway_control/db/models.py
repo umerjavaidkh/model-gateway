@@ -685,3 +685,15 @@ class FineTuneJob(Base, TimestampMixin):
         BigInteger, nullable=False, server_default=text("0")
     )
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+
+    #: The promotion gate, fixed at submission so lowering it later cannot
+    #: retroactively promote something that already failed.
+    gate_min_score: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    gate_must_not_regress: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'[]'")
+    )
+    #: What the suite measured, as JSON. Stored whole rather than as rows in a
+    #: metrics table: a scorecard is written once, read once, and only ever
+    #: compared against another scorecard — there is nothing to query across.
+    scorecard: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
+    baseline: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))

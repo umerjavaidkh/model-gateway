@@ -35,6 +35,7 @@ from model_gateway_control.domain.component import (
 from model_gateway_control.domain.finetune import DatasetRef, FineTuneJob
 from model_gateway_control.domain.finetune import Spec as FineTuneSpec
 from model_gateway_control.domain.identity import RateLimit
+from model_gateway_control.domain.scorecard import BASIS_POINTS, PromotionGate, Scorecard
 from model_gateway_control.domain.signing import Signature, TrustStore
 from model_gateway_control.errors import (
     ConflictError,
@@ -43,7 +44,7 @@ from model_gateway_control.errors import (
     InvalidRequestError,
     NotFoundError,
 )
-from model_gateway_control.service.finetune import FineTuneService, Trainers
+from model_gateway_control.service.finetune import Evaluators, FineTuneService, Trainers
 from model_gateway_control.service.keys import KeyService
 from model_gateway_control.service.registry import RegistryService
 from model_gateway_control.snapshot import build_snapshot
@@ -82,6 +83,10 @@ class AdminSettings:
     #: API refuses a job naming a trainer it does not have, so the mistake
     #: surfaces at submission rather than in a reconciler log.
     trainers: Trainers = field(default_factory=Trainers)
+    #: Eval suites this control plane can run. A job naming one it does not
+    #: have is refused at submission, because a job whose gate can never run
+    #: would train at full cost and then stall.
+    evaluators: Evaluators = field(default_factory=Evaluators)
     now: Callable[[], datetime] | None = None
 
 
@@ -356,23 +361,29 @@ def create_app(settings: AdminSettings) -> FastAPI:
 
     @app.post("/v1/finetune/jobs", status_code=status.HTTP_201_CREATED, dependencies=[Authorized])
     async def submit_finetune_job(body: SubmitFineTuneJobRequest, session: Session) -> Response:
-        job = await FineTuneService(session, settings.trainers).submit(body.to_job())
+        job = await FineTuneService(session, settings.trainers, settings.evaluators).submit(
+            body.to_job()
+        )
         await session.commit()
         return _json_response(status.HTTP_201_CREATED, _job_json(job))
 
     @app.get("/v1/finetune/jobs", dependencies=[Authorized])
     async def list_finetune_jobs(session: Session, tenant: str | None = None) -> Response:
-        jobs = await FineTuneService(session, settings.trainers).list(tenant)
+        jobs = await FineTuneService(session, settings.trainers, settings.evaluators).list(tenant)
         return _json_response(status.HTTP_200_OK, {"jobs": [_job_json(j) for j in jobs]})
 
     @app.get("/v1/finetune/jobs/{tenant}/{name}", dependencies=[Authorized])
     async def get_finetune_job(tenant: str, name: str, session: Session) -> Response:
-        job = await FineTuneService(session, settings.trainers).get(tenant, name)
+        job = await FineTuneService(session, settings.trainers, settings.evaluators).get(
+            tenant, name
+        )
         return _json_response(status.HTTP_200_OK, _job_json(job))
 
     @app.post("/v1/finetune/jobs/{tenant}/{name}/cancel", dependencies=[Authorized])
     async def cancel_finetune_job(tenant: str, name: str, session: Session) -> Response:
-        job = await FineTuneService(session, settings.trainers).cancel(tenant, name)
+        job = await FineTuneService(session, settings.trainers, settings.evaluators).cancel(
+            tenant, name
+        )
         await session.commit()
         return _json_response(status.HTTP_200_OK, _job_json(job))
 
@@ -483,6 +494,11 @@ class SubmitFineTuneJobRequest(BaseModel):
     hyperparameters: dict[str, str] = Field(default_factory=dict)
     budget_ref: str = ""
     eval_suite: str = ""
+    #: The bar the suite must clear, in basis points out of 10,000. Integers
+    #: rather than a fraction, so 0.87 against 0.8699999999 is not a coin toss
+    #: decided by the last bits of a float.
+    min_score: int = Field(default=0, ge=0, le=BASIS_POINTS)
+    must_not_regress: list[str] = Field(default_factory=list)
 
     def to_job(self) -> FineTuneJob:
         return FineTuneJob(
@@ -505,6 +521,10 @@ class SubmitFineTuneJobRequest(BaseModel):
                 hyperparameters=self.hyperparameters,
                 budget_ref=self.budget_ref,
                 eval_suite=self.eval_suite,
+                promotion_gate=PromotionGate(
+                    min_score=self.min_score,
+                    must_not_regress=tuple(self.must_not_regress),
+                ),
             ),
         )
 
@@ -527,6 +547,10 @@ def _job_json(job: FineTuneJob) -> dict[str, Any]:
             "hyperparameters": job.spec.hyperparameters,
             "budget_ref": job.spec.budget_ref,
             "eval_suite": job.spec.eval_suite,
+            "promotion_gate": {
+                "min_score": job.spec.promotion_gate.min_score,
+                "must_not_regress": list(job.spec.promotion_gate.must_not_regress),
+            },
         },
         "status": {
             "phase": str(job.status.phase),
@@ -535,7 +559,31 @@ def _job_json(job: FineTuneJob) -> dict[str, Any]:
             "reason": job.status.reason,
             "cost_micro_usd": job.status.cost_micro_usd,
             "attempts": job.status.attempts,
+            "scorecard": _scorecard_json(job.status.scorecard),
+            "baseline": _scorecard_json(job.status.baseline),
         },
+    }
+
+
+def _scorecard_json(card: Scorecard | None) -> dict[str, Any] | None:
+    """What a suite measured. Null when nothing has measured it yet."""
+    if card is None:
+        return None
+    return {
+        "score": card.score,
+        "suite": card.suite,
+        "suite_version": card.suite_version,
+        "metrics": [
+            {
+                "name": m.name,
+                "value": m.value,
+                # Which way is better travels with the number, so a client
+                # comparing two scorecards cannot get the direction wrong.
+                "direction": str(m.direction),
+                "unit": m.unit,
+            }
+            for m in card.metrics
+        ],
     }
 
 

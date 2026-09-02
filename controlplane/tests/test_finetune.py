@@ -15,7 +15,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from model_gateway_control.contracts import run_trainer_suite
+from model_gateway_control.contracts import run_evaluator_suite, run_trainer_suite
 from model_gateway_control.db import models
 from model_gateway_control.db.models import Base
 from model_gateway_control.db.session import create_engine
@@ -25,8 +25,16 @@ from model_gateway_control.domain.finetune import (
     Phase,
     Spec,
 )
+from model_gateway_control.domain.scorecard import (
+    Direction,
+    Metric,
+    PromotionGate,
+    Scorecard,
+)
 from model_gateway_control.errors import ConflictError, InvalidRequestError, NotFoundError
+from model_gateway_control.service.evaluator import EvalPort, Target
 from model_gateway_control.service.finetune import (
+    Evaluators,
     FineTuneService,
     Reconciler,
     Trainers,
@@ -477,3 +485,271 @@ async def test_two_reconcilers_book_only_one_training_run(
         stored = await FineTuneService(session, trainers).get("acme", "support-triage-v3")
     assert stored.status.phase is Phase.TRAINING
     assert stored.status.external_id == "ext-key-support-triage-v3"
+
+
+# --- the eval gate ----------------------------------------------------------
+
+
+class FakeEvaluator:
+    """A suite that reports what it is told to, and records what it was asked."""
+
+    def __init__(self, suite: str = "triage-regression-v2", version: str = "1.0.0") -> None:
+        self._suite = suite
+        self._version = version
+        self.targets: list[Target] = []
+        self.run_error: Exception | None = None
+        self.candidate_score = 9_100
+        self.baseline_score = 9_000
+        self.candidate_latency = 1_100
+        self.baseline_latency = 1_200
+
+    def name(self) -> str:
+        return self._suite
+
+    def version(self) -> str:
+        return self._version
+
+    async def run(self, target: Target) -> Scorecard:
+        if self.run_error is not None:
+            raise self.run_error
+        self.targets.append(target)
+        score = self.baseline_score if target.describes_baseline else self.candidate_score
+        ms = self.baseline_latency if target.describes_baseline else self.candidate_latency
+        return Scorecard(
+            score=score,
+            suite=self._suite,
+            suite_version=self._version,
+            metrics=(
+                Metric(
+                    name="latency_p95",
+                    value=ms,
+                    direction=Direction.LOWER_IS_BETTER,
+                    unit="ms",
+                ),
+            ),
+        )
+
+
+@pytest.fixture
+def evaluator() -> FakeEvaluator:
+    return FakeEvaluator()
+
+
+@pytest.fixture
+def evaluators(evaluator: FakeEvaluator) -> Evaluators:
+    return Evaluators((evaluator,))
+
+
+def gated_spec(**gate_kwargs: object) -> Spec:
+    return spec(
+        eval_suite="triage-regression-v2",
+        promotion_gate=PromotionGate(**gate_kwargs),  # type: ignore[arg-type]
+    )
+
+
+async def train_to_evaluating(
+    sessions: async_sessionmaker[AsyncSession],
+    trainers: Trainers,
+    evaluators: Evaluators,
+    trainer: FakeTrainer,
+    job_spec: Spec,
+) -> Reconciler:
+    """Run a job as far as EVALUATING and return the reconciler."""
+    async with sessions() as session:
+        await FineTuneService(session, trainers, evaluators).submit(job(job_spec=job_spec))
+        await session.commit()
+
+    reconciler = Reconciler(sessions, trainers, evaluators)
+    await reconciler.reconcile_once()
+    trainer.next_state = RunState.SUCCEEDED
+    await reconciler.reconcile_once()
+    return reconciler
+
+
+async def test_a_job_with_no_eval_suite_stops_at_trained(
+    sessions: async_sessionmaker[AsyncSession], trainer: FakeTrainer, trainers: Trainers
+) -> None:
+    # An artifact nobody has measured is one an operator promotes deliberately,
+    # not one the loop promotes because no gate happened to be configured.
+    await submit_job(sessions, trainers)
+    reconciler = Reconciler(sessions, trainers)
+    await reconciler.reconcile_once()
+    trainer.next_state = RunState.SUCCEEDED
+
+    [outcome] = await reconciler.reconcile_once()
+
+    assert outcome.job.status.phase is Phase.TRAINED
+    assert outcome.job.is_terminal
+    assert await reconciler.reconcile_once() == []
+
+
+async def test_an_artifact_that_clears_the_gate_becomes_ready(
+    sessions: async_sessionmaker[AsyncSession],
+    trainer: FakeTrainer,
+    trainers: Trainers,
+    evaluator: FakeEvaluator,
+    evaluators: Evaluators,
+) -> None:
+    reconciler = await train_to_evaluating(
+        sessions, trainers, evaluators, trainer, gated_spec(min_score=8_700)
+    )
+
+    [outcome] = await reconciler.reconcile_once()
+
+    assert outcome.job.status.phase is Phase.READY
+    assert outcome.job.status.scorecard is not None
+    assert outcome.job.status.scorecard.score == 9_100
+    # No baseline was needed, so none was measured: a second evaluation for a
+    # gate that is purely a minimum score doubles its cost to learn nothing.
+    assert [t.describes_baseline for t in evaluator.targets] == [False]
+
+
+async def test_an_artifact_that_misses_the_bar_fails_and_keeps_its_numbers(
+    sessions: async_sessionmaker[AsyncSession],
+    trainer: FakeTrainer,
+    trainers: Trainers,
+    evaluator: FakeEvaluator,
+    evaluators: Evaluators,
+) -> None:
+    # A failed gate is exactly when someone wants to see what was measured.
+    # Discarding it means the only way to find out is to train again.
+    evaluator.candidate_score = 5_000
+    reconciler = await train_to_evaluating(
+        sessions, trainers, evaluators, trainer, gated_spec(min_score=8_700)
+    )
+
+    [outcome] = await reconciler.reconcile_once()
+
+    assert outcome.job.status.phase is Phase.FAILED
+    assert outcome.job.status.scorecard is not None
+    assert outcome.job.status.scorecard.score == 5_000
+    assert "below the required" in outcome.job.status.reason
+
+
+async def test_a_baseline_is_measured_only_when_something_must_not_regress(
+    sessions: async_sessionmaker[AsyncSession],
+    trainer: FakeTrainer,
+    trainers: Trainers,
+    evaluator: FakeEvaluator,
+    evaluators: Evaluators,
+) -> None:
+    reconciler = await train_to_evaluating(
+        sessions, trainers, evaluators, trainer, gated_spec(must_not_regress=("latency_p95",))
+    )
+
+    [outcome] = await reconciler.reconcile_once()
+
+    assert outcome.job.status.phase is Phase.READY
+    # The candidate, then the base model, measured by the same suite version.
+    assert [t.describes_baseline for t in evaluator.targets] == [False, True]
+    assert outcome.job.status.baseline is not None
+    assert outcome.job.status.baseline.suite_version == "1.0.0"
+
+
+async def test_a_regression_against_the_base_model_fails_the_gate(
+    sessions: async_sessionmaker[AsyncSession],
+    trainer: FakeTrainer,
+    trainers: Trainers,
+    evaluator: FakeEvaluator,
+    evaluators: Evaluators,
+) -> None:
+    # The failure a fine-tune actually produces: no errors, just worse output.
+    evaluator.candidate_latency = 2_000
+    evaluator.baseline_latency = 1_000
+    reconciler = await train_to_evaluating(
+        sessions, trainers, evaluators, trainer, gated_spec(must_not_regress=("latency_p95",))
+    )
+
+    [outcome] = await reconciler.reconcile_once()
+
+    assert outcome.job.status.phase is Phase.FAILED
+    assert "latency_p95 regressed from 1000 to 2000" in outcome.job.status.reason
+
+
+async def test_scorecards_survive_the_round_trip(
+    sessions: async_sessionmaker[AsyncSession],
+    trainer: FakeTrainer,
+    trainers: Trainers,
+    evaluators: Evaluators,
+) -> None:
+    # A scorecard that loses its direction on the way to the database makes
+    # every later comparison meaningless.
+    reconciler = await train_to_evaluating(
+        sessions, trainers, evaluators, trainer, gated_spec(must_not_regress=("latency_p95",))
+    )
+    await reconciler.reconcile_once()
+
+    async with sessions() as session:
+        stored = await FineTuneService(session, trainers, evaluators).get(
+            "acme", "support-triage-v3"
+        )
+
+    assert stored.status.scorecard is not None
+    measured = stored.status.scorecard.metric("latency_p95")
+    assert measured is not None
+    assert measured.direction is Direction.LOWER_IS_BETTER
+    assert measured.unit == "ms"
+    assert stored.spec.promotion_gate.must_not_regress == ("latency_p95",)
+
+
+async def test_an_evaluator_that_raises_leaves_the_job_evaluating(
+    sessions: async_sessionmaker[AsyncSession],
+    trainer: FakeTrainer,
+    trainers: Trainers,
+    evaluator: FakeEvaluator,
+    evaluators: Evaluators,
+) -> None:
+    # An eval backend outage must not fail an artifact that trained fine.
+    reconciler = await train_to_evaluating(
+        sessions, trainers, evaluators, trainer, gated_spec(min_score=8_700)
+    )
+
+    evaluator.run_error = RuntimeError("the eval harness is down")
+    assert await reconciler.reconcile_once() == []
+
+    async with sessions() as session:
+        stored = await FineTuneService(session, trainers, evaluators).get(
+            "acme", "support-triage-v3"
+        )
+    assert stored.status.phase is Phase.EVALUATING
+    assert not stored.is_terminal
+
+    # And it recovers once the harness is back.
+    evaluator.run_error = None
+    [outcome] = await reconciler.reconcile_once()
+    assert outcome.job.status.phase is Phase.READY
+
+
+async def test_a_job_naming_an_unconfigured_suite_is_refused_before_it_trains(
+    sessions: async_sessionmaker[AsyncSession], trainers: Trainers, evaluators: Evaluators
+) -> None:
+    # A job whose gate can never run would train, at full cost, and then stall.
+    async with sessions() as session:
+        with pytest.raises(NotFoundError, match="no eval suite named"):
+            await FineTuneService(session, trainers, evaluators).submit(
+                job(job_spec=spec(eval_suite="a-suite-nobody-configured"))
+            )
+
+
+async def test_the_fake_evaluator_satisfies_the_evaluator_contract() -> None:
+    # Keeps the fake honest: one that does not satisfy the contract makes every
+    # test above prove something about a suite that could not exist.
+    async def build() -> EvalPort:
+        return FakeEvaluator()
+
+    await run_evaluator_suite(build)
+
+
+async def test_the_contract_suite_catches_an_unstamped_scorecard() -> None:
+    # The gate refuses a candidate and a baseline from different suite
+    # versions. An unstamped scorecard makes that check pass by accident.
+    class AnonymousEvaluator(FakeEvaluator):
+        async def run(self, target: Target) -> Scorecard:
+            card = await super().run(target)
+            return Scorecard(score=card.score, metrics=card.metrics)
+
+    async def build() -> EvalPort:
+        return AnonymousEvaluator()
+
+    with pytest.raises(AssertionError, match="scorecard says suite"):
+        await run_evaluator_suite(build)

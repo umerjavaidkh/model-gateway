@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from model_gateway_control.db.session import create_engine, session_factory
 from model_gateway_control.errors import InvalidRequestError
-from model_gateway_control.service.finetune import Reconciler, Trainers
+from model_gateway_control.service.finetune import Evaluators, Reconciler, Trainers
 
 logger = logging.getLogger("finetune")
 
@@ -37,13 +37,14 @@ DEFAULT_INTERVAL_SECONDS = 30.0
 async def run(
     sessions: async_sessionmaker[AsyncSession],
     trainers: Trainers,
+    evaluators: Evaluators | None = None,
     interval: float = DEFAULT_INTERVAL_SECONDS,
     *,
     stop: asyncio.Event | None = None,
 ) -> None:
     """Reconcile until stopped."""
     stop = stop or asyncio.Event()
-    reconciler = Reconciler(sessions, trainers)
+    reconciler = Reconciler(sessions, trainers, evaluators or Evaluators())
 
     while not stop.is_set():
         try:
@@ -73,11 +74,13 @@ def main() -> int:
 
     interval = float(os.environ.get("GATEWAY_FINETUNE_INTERVAL", DEFAULT_INTERVAL_SECONDS))
 
-    # No trainers are registered here yet. A deployment builds this process
-    # with the adapters it actually has; shipping one for a backend nobody can
-    # reach from this repository would be an adapter nothing has ever run.
+    # No adapters are registered here. A deployment builds this process with
+    # the ones it actually has; shipping one for a backend nobody can reach
+    # from this repository would be code nothing has ever run, and the contract
+    # suites are what such an adapter gets checked against wherever it lives.
     trainers = Trainers()
-    logger.warning("no trainer adapters are registered; jobs will be accepted and never advance")
+    evaluators = Evaluators()
+    logger.warning("no trainer or eval adapters are registered; jobs will never advance")
 
     engine = create_engine(database_url)
     sessions = session_factory(engine)
@@ -88,7 +91,7 @@ def main() -> int:
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, stop.set)
         try:
-            await run(sessions, trainers, interval, stop=stop)
+            await run(sessions, trainers, evaluators, interval, stop=stop)
         finally:
             await engine.dispose()
 

@@ -6,6 +6,7 @@ the contract is the failure these catch, and for a TrainerPort that failure
 costs a GPU bill rather than a wrong answer.
 """
 
+from model_gateway_control.contracts.evaluator import run_evaluator_suite
 from model_gateway_control.contracts.trainer import run_trainer_suite
 
-__all__ = ["run_trainer_suite"]
+__all__ = ["run_evaluator_suite", "run_trainer_suite"]
