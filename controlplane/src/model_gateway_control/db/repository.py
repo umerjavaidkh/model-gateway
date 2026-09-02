@@ -44,6 +44,7 @@ from model_gateway_control.domain.component import (
 )
 from model_gateway_control.domain.identity import BudgetRef, Principal, RateLimit
 from model_gateway_control.domain.policy import PolicyBundle, PolicyEffect, PolicyRule
+from model_gateway_control.domain.signing import Signature
 from model_gateway_control.domain.tenant import Fleet, PluginBinding, Tenant
 from model_gateway_control.errors import NotFoundError
 
@@ -328,6 +329,18 @@ def to_manifest(row: models.Component) -> Manifest:
     )
 
 
+def to_signature(row: models.Component) -> Signature | None:
+    """Map a component row's signature columns, if it carries one.
+
+    A row with a key id but no signature — or the reverse — is treated as
+    unsigned rather than as an error: only half a signature proves nothing, and
+    the policy check that follows decides whether proving nothing is allowed.
+    """
+    if not row.signing_key_id or not row.signature:
+        return None
+    return Signature.decode(row.signing_key_id, row.signature)
+
+
 def to_component(row: models.Component) -> Component:
     """Map a component row to its domain form, invariants and all.
 
@@ -343,6 +356,7 @@ def to_component(row: models.Component) -> Component:
         manifest=to_manifest(row),
         status=Status(row.status),
         admission=_to_admission(latest) if latest is not None else None,
+        signature=to_signature(row),
     )
 
 

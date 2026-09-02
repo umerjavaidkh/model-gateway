@@ -38,6 +38,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -426,7 +427,22 @@ class Component(Base, TimestampMixin):
     execution: Mapped[str] = mapped_column(String(16), nullable=False, default="sidecar")
     image: Mapped[str] = mapped_column(String(512), nullable=False, default="")
     #: sha256:<64 hex> of the WASM module, for in-process components.
-    module: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    #:
+    #: server_default as well as default, matching the migration that added it:
+    #: without it every autogenerate run proposes dropping the default that is
+    #: actually in the database.
+    module: Mapped[str] = mapped_column(
+        String(128), nullable=False, default="", server_default=text("''")
+    )
+    #: The publisher key that signed this manifest, and the signature itself as
+    #: base64. Stored so it can be re-verified against the configured trust
+    #: root at any time — the row is evidence, not a verdict.
+    signing_key_id: Mapped[str] = mapped_column(
+        String(128), nullable=False, default="", server_default=text("''")
+    )
+    signature: Mapped[str] = mapped_column(
+        String(256), nullable=False, default="", server_default=text("''")
+    )
 
     capabilities: Mapped[list[ComponentCapability]] = relationship(
         back_populates="component", cascade="all, delete-orphan", lazy="selectin"

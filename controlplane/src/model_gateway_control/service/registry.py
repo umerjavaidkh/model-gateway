@@ -28,6 +28,7 @@ sandbox — and the absence of one fails closed rather than fails open. See
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from typing import Protocol
 
@@ -43,7 +44,10 @@ from model_gateway_control.domain.component import (
     Port,
     Status,
 )
+from model_gateway_control.domain.signing import Signature, TrustStore
 from model_gateway_control.errors import ConflictError, ForbiddenError, NotFoundError
+
+_log = logging.getLogger(__name__)
 
 
 class AdmissionGate(Protocol):
@@ -83,11 +87,22 @@ class RegistryService:
     transaction boundary — the same convention as the repository.
     """
 
-    def __init__(self, session: AsyncSession, gate: AdmissionGate | None = None) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        gate: AdmissionGate | None = None,
+        trust: TrustStore | None = None,
+    ) -> None:
         self._session = session
         self._gate = gate or NoGate()
+        # An empty store with the default policy accepts unsigned components
+        # and verifies any signature it is given against no keys — which means
+        # it rejects every signature. That is the right default for a
+        # deployment that has not set signing up: unsigned works, and a
+        # signature nobody can check is not quietly treated as valid.
+        self._trust = trust or TrustStore()
 
-    async def register(self, manifest: Manifest) -> Component:
+    async def register(self, manifest: Manifest, signature: Signature | None = None) -> Component:
         """Record a manifest. It is not bindable until it is admitted.
 
         Re-registering an existing name and version is a conflict rather than
@@ -99,6 +114,12 @@ class RegistryService:
             raise ConflictError(
                 f"{manifest.ref} is already registered; publish a new version instead"
             )
+
+        # Verified before anything is written. A publisher watching a failed
+        # registration gets a clear reason here; the check that actually gates
+        # production is the one the snapshot builder does, because a row
+        # saying "this was verified" is only as good as the database.
+        signer = self._trust.verify_for_registration(manifest.digest(), signature)
 
         row = models.Component(
             name=manifest.name,
@@ -112,11 +133,17 @@ class RegistryService:
             execution=str(manifest.execution),
             image=manifest.image,
             module=manifest.module,
+            signing_key_id=signature.key_id if signature else "",
+            signature=signature.encoded() if signature else "",
             capabilities=[models.ComponentCapability(name=c) for c in manifest.capabilities],
         )
         self._session.add(row)
         await self._session.flush()
-        return Component(manifest=manifest, status=Status.PENDING)
+        if signer is not None:
+            _log.info(
+                "registered %s signed by %s (%s)", manifest.ref, signer.key_id, signer.publisher
+            )
+        return Component(manifest=manifest, status=Status.PENDING, signature=signature)
 
     async def admit(self, name: str, version: str) -> Component:
         """Run the configured gate and activate the component if it passes.

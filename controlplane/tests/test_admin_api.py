@@ -13,6 +13,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 import pytest_asyncio
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
@@ -20,7 +22,14 @@ from model_gateway_control.api.app import AdminSettings, create_app
 from model_gateway_control.db import models
 from model_gateway_control.db.models import Base
 from model_gateway_control.db.session import create_engine, session_factory
+from model_gateway_control.domain.component import manifest_from_dict
 from model_gateway_control.domain.identity import compute_key_lookup
+from model_gateway_control.domain.signing import (
+    Policy,
+    PublisherKey,
+    TrustStore,
+    sign,
+)
 from model_gateway_control.wire import snapshot_pb2 as pb
 
 DEFAULT_URL = "sqlite+aiosqlite:///:memory:"
@@ -514,3 +523,105 @@ async def test_a_snapshot_cannot_bind_a_component_that_was_never_admitted(
 
     assert refused.status_code == 400
     assert "presidio" in refused.json()["error"]["message"]
+
+
+# --- publisher signatures ---------------------------------------------------
+
+
+@pytest.fixture
+async def signing_client(engine: AsyncEngine) -> AsyncIterator[tuple[AsyncClient, object]]:
+    """A client whose control plane requires a signature from one known key."""
+    private = Ed25519PrivateKey.generate()
+    public = private.public_key().public_bytes(encoding=Encoding.Raw, format=PublicFormat.Raw)
+    key = PublisherKey(key_id="acme-2026", publisher="ACME", public_key=public)
+
+    app = create_app(
+        AdminSettings(
+            engine=engine,
+            key_pepper=PEPPER,
+            admin_token=TOKEN,
+            trust=TrustStore(keys=(key,), policy=Policy.REQUIRED),
+            now=lambda: NOW,
+        )
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://admin",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+    ) as client:
+        yield client, private
+
+
+def _manifest_body(**overrides: object) -> dict[str, object]:
+    body: dict[str, object] = {
+        "name": "acme-guard",
+        "version": "1.0.0",
+        "port": "guardrail",
+        "latency_budget_ms": 50,
+        "execution": "sidecar",
+        "image": "ghcr.io/acme/guard@sha256:" + "0" * 64,
+    }
+    body.update(overrides)
+    return body
+
+
+async def test_a_signed_registration_records_who_vouched_for_it(
+    signing_client: tuple[AsyncClient, Ed25519PrivateKey],
+) -> None:
+    client, private = signing_client
+    body = _manifest_body()
+    digest = manifest_from_dict(dict(body)).digest()
+    signature = sign(digest, private, "acme-2026")
+
+    created = await client.post(
+        "/v1/components",
+        json=body | {"signing_key_id": "acme-2026", "signature": signature.encoded()},
+    )
+    assert created.status_code == 201, created.text
+
+    fetched = await client.get("/v1/components/acme-guard/1.0.0")
+    assert fetched.json()["signing_key_id"] == "acme-2026"
+    # The signature comes back so anyone can re-check it, rather than having to
+    # take the control plane's word that it was checked.
+    assert fetched.json()["signature"] == signature.encoded()
+
+
+async def test_an_unsigned_registration_is_refused_when_policy_requires_one(
+    signing_client: tuple[AsyncClient, Ed25519PrivateKey],
+) -> None:
+    client, _ = signing_client
+
+    response = await client.post("/v1/components", json=_manifest_body())
+
+    assert response.status_code == 403
+    assert "signature" in response.text
+
+
+async def test_a_signature_over_a_different_manifest_is_refused(
+    signing_client: tuple[AsyncClient, Ed25519PrivateKey],
+) -> None:
+    # The publisher signed version 1.0.0 and submitted 1.0.1. Catching it here
+    # is the difference between a signature and a decoration.
+    client, private = signing_client
+    signed = manifest_from_dict(_manifest_body())
+    signature = sign(signed.digest(), private, "acme-2026")
+
+    response = await client.post(
+        "/v1/components",
+        json=_manifest_body(version="1.0.1")
+        | {"signing_key_id": "acme-2026", "signature": signature.encoded()},
+    )
+
+    assert response.status_code == 403
+    assert "does not match this manifest" in response.text
+
+
+async def test_registration_still_works_with_no_signing_configured(
+    client: AsyncClient,
+) -> None:
+    # The default deployment must keep working, or turning signing on becomes a
+    # prerequisite for using the registry at all.
+    response = await client.post("/v1/components", json=_manifest_body())
+
+    assert response.status_code == 201
+    assert response.json()["signing_key_id"] == ""

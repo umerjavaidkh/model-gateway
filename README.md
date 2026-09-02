@@ -177,5 +177,5 @@ decided and why.
 | M10a — Component registry: manifests, admission records, binding gate | **done** |
 | M10b — Sandboxed contract-test runner and the sidecar protocol | **done** |
 | M10c — WASM in-process components | **done** |
-| M10d — Signed manifests | next |
-| M11+ — Fine-tuning | |
+| M10d — Signed manifests | **done** |
+| M11+ — Fine-tuning: TrainerPort, EvalPort, job reconciler | next |
