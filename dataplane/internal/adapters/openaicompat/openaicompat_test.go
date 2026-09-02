@@ -367,3 +367,50 @@ func TestAnImpossibleCachedCountIsClamped(t *testing.T) {
 		t.Fatalf("Input = %d, want it clamped at zero", resp.Usage.Input)
 	}
 }
+
+func TestAnAdapterIsRequestedByItsOwnName(t *testing.T) {
+	// Multi-LoRA: one server holds a base model and many adapters, and the
+	// model field is how a request says which to load.
+	//
+	// Sending the base model instead is the failure worth naming, because it
+	// is silent. The routing key carries the adapter through selection,
+	// weighting and shadowing, and then the last hop asks for the base model —
+	// so a canary measures the very thing it was meant to be compared against
+	// and reports that it matched perfectly.
+	u := newUpstream(t, func(w http.ResponseWriter, _ []byte) {
+		_, _ = io.WriteString(w, jsonResponse)
+	})
+
+	call := callFor(u, `{"model":"fast","messages":[]}`)
+	call.Deployment.Key = core.RoutingKey{BaseModel: "qwen2.5-7b", AdapterID: "support-triage-v3"}
+
+	if _, err := openaicompat.New().Invoke(t.Context(), call); err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+
+	var sent map[string]any
+	if err := json.Unmarshal(u.gotBody, &sent); err != nil {
+		t.Fatalf("upstream got invalid JSON: %v", err)
+	}
+	if sent["model"] != "support-triage-v3" {
+		t.Fatalf("model = %v, want the adapter's own name", sent["model"])
+	}
+}
+
+func TestAPlainModelIsStillRequestedByItsBaseName(t *testing.T) {
+	u := newUpstream(t, func(w http.ResponseWriter, _ []byte) {
+		_, _ = io.WriteString(w, jsonResponse)
+	})
+
+	if _, err := openaicompat.New().Invoke(t.Context(), callFor(u, `{"model":"fast"}`)); err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+
+	var sent map[string]any
+	if err := json.Unmarshal(u.gotBody, &sent); err != nil {
+		t.Fatalf("upstream got invalid JSON: %v", err)
+	}
+	if sent["model"] != "gpt-4o-mini" {
+		t.Fatalf("model = %v, want the base model", sent["model"])
+	}
+}

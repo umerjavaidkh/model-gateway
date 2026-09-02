@@ -194,7 +194,7 @@ func TestTheDefaultEffectAppliesWhenNothingMatches(t *testing.T) {
 func TestDecodeRejectsARuleWithNoEffect(t *testing.T) {
 	// A rule that neither allows nor denies would be skipped silently on every
 	// request, which looks exactly like a rule that never matches.
-	raw := encodeBundle(t, &bundleSpec{rules: []ruleSpec{{id: "broken"}}})
+	raw := encodeBundle(t, &bundleSpec{rules: []ruleSpec{{id: "broken", unset: true}}})
 	if _, err := policy.Decode(raw); err == nil {
 		t.Fatal("a rule with no effect was accepted")
 	}
@@ -221,17 +221,17 @@ func TestDecodeOfNothingIsAnEmptyBundle(t *testing.T) {
 	}
 }
 
-func TestTheCacheIsInvalidatedByASnapshotVersion(t *testing.T) {
+func TestTheCacheIsInvalidatedByANewSnapshotDigest(t *testing.T) {
 	// Keeping a bundle decoded against an older snapshot would mean policy
 	// silently lagging configuration.
 	cache := policy.NewCache()
 	first := encodeBundle(t, &bundleSpec{rules: []ruleSpec{{id: "a", allow: true}}})
 	second := encodeBundle(t, &bundleSpec{rules: []ruleSpec{{id: "b", allow: true}}})
 
-	if _, err := cache.For("acme", 1, first); err != nil {
+	if _, err := cache.For("acme", "sha256:one", first); err != nil {
 		t.Fatalf("For: %v", err)
 	}
-	bundle, err := cache.For("acme", 2, second)
+	bundle, err := cache.For("acme", "sha256:two", second)
 	if err != nil {
 		t.Fatalf("For: %v", err)
 	}
@@ -240,19 +240,45 @@ func TestTheCacheIsInvalidatedByASnapshotVersion(t *testing.T) {
 	}
 }
 
-func TestTheCacheReturnsTheSameBundleWithinAVersion(t *testing.T) {
+func TestPolicyChangesTakeEffectWhenTheVersionNumberDoesNotMove(t *testing.T) {
+	// The bug this cache had: it was keyed on the layer's version *number*,
+	// which whoever builds a snapshot is free to leave alone. The fleet's sat
+	// at 1 while policy was rewritten, so every worker went on enforcing the
+	// first policy it ever saw — an operator revoking access got no error and
+	// no effect.
+	//
+	// A digest is a content hash. It cannot fail to change when the content
+	// does, which is the property the cache actually needs.
 	cache := policy.NewCache()
-	raw := encodeBundle(t, &bundleSpec{rules: []ruleSpec{{id: "a", allow: true}}})
+	permissive := encodeBundle(t, &bundleSpec{rules: []ruleSpec{{id: "allow-all", allow: true}}})
+	restrictive := encodeBundle(t, &bundleSpec{rules: []ruleSpec{{id: "deny-all"}}})
 
-	first, err := cache.For("acme", 1, raw)
+	if _, err := cache.For("acme", "sha256:before", permissive); err != nil {
+		t.Fatalf("For: %v", err)
+	}
+	bundle, err := cache.For("acme", "sha256:after", restrictive)
 	if err != nil {
 		t.Fatalf("For: %v", err)
 	}
-	second, err := cache.For("acme", 1, raw)
+
+	if bundle.Rules[0].ID != "deny-all" {
+		t.Fatalf("rule = %q; the new policy did not take effect", bundle.Rules[0].ID)
+	}
+}
+
+func TestTheCacheReturnsTheSameBundleWithinASnapshot(t *testing.T) {
+	cache := policy.NewCache()
+	raw := encodeBundle(t, &bundleSpec{rules: []ruleSpec{{id: "a", allow: true}}})
+
+	first, err := cache.For("acme", "sha256:one", raw)
+	if err != nil {
+		t.Fatalf("For: %v", err)
+	}
+	second, err := cache.For("acme", "sha256:one", raw)
 	if err != nil {
 		t.Fatalf("For: %v", err)
 	}
 	if first.Rules[0].ID != second.Rules[0].ID {
-		t.Fatal("the cache returned a different bundle within one version")
+		t.Fatal("the cache returned a different bundle within one snapshot")
 	}
 }

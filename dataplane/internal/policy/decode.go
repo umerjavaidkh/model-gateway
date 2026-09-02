@@ -114,8 +114,16 @@ func decodeTier(t pb.TrustTier) core.TrustTier {
 // tenant and the snapshot version the caller supplies, so a configuration
 // change invalidates it without anything having to remember to.
 type Cache struct {
-	mu      sync.RWMutex
-	version uint64
+	mu sync.RWMutex
+	// digest identifies the snapshot these bundles were decoded from.
+	//
+	// The layer's *digest*, not its version number. A version number is
+	// assigned by whoever bumps it and is free to stay the same across a
+	// configuration change — the fleet's sat at 1 while policy was rewritten,
+	// so a cache keyed on it never invalidated and every worker went on
+	// enforcing the first policy it ever saw. The digest is a content hash: it
+	// cannot fail to change when the content does.
+	digest  string
 	bundles map[core.TenantID]Bundle
 }
 
@@ -124,14 +132,14 @@ func NewCache() *Cache {
 	return &Cache{bundles: map[core.TenantID]Bundle{}}
 }
 
-// For returns the decoded bundle for a tenant at a snapshot version.
+// For returns the decoded bundle for a tenant at a snapshot digest.
 //
 // A bundle that fails to decode is returned as empty with the error, and the
 // caller decides. It is not cached, so a fixed configuration takes effect at
 // the next snapshot rather than at the next restart.
-func (c *Cache) For(tenant core.TenantID, version uint64, raw []byte) (Bundle, error) {
+func (c *Cache) For(tenant core.TenantID, digest string, raw []byte) (Bundle, error) {
 	c.mu.RLock()
-	if c.version == version {
+	if c.digest == digest {
 		if bundle, ok := c.bundles[tenant]; ok {
 			c.mu.RUnlock()
 			return bundle, nil
@@ -146,10 +154,10 @@ func (c *Cache) For(tenant core.TenantID, version uint64, raw []byte) (Bundle, e
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.version != version {
+	if c.digest != digest {
 		// A new snapshot: everything decoded against the old one is stale, and
 		// keeping it would mean policy silently lagging configuration.
-		c.version = version
+		c.digest = digest
 		c.bundles = map[core.TenantID]Bundle{}
 	}
 	c.bundles[tenant] = bundle

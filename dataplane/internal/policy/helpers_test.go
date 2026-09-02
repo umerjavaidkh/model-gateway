@@ -15,6 +15,7 @@ import (
 type ruleSpec struct {
 	id    string
 	allow bool
+	unset bool
 	cidrs []string
 }
 
@@ -27,9 +28,14 @@ func encodeBundle(t *testing.T, spec *bundleSpec) []byte {
 
 	bundle := &pb.PolicyBundle{Id: "test", Version: 1}
 	for _, rule := range spec.rules {
-		effect := pb.PolicyEffect_POLICY_EFFECT_UNSPECIFIED
+		effect := pb.PolicyEffect_POLICY_EFFECT_DENY
 		if rule.allow {
 			effect = pb.PolicyEffect_POLICY_EFFECT_ALLOW
+		}
+		if rule.unset {
+			// A rule that neither allows nor denies, for the cases about
+			// refusing one.
+			effect = pb.PolicyEffect_POLICY_EFFECT_UNSPECIFIED
 		}
 		bundle.Rules = append(bundle.Rules, &pb.PolicyRule{
 			Id: rule.id, Effect: effect, SourceCidrs: rule.cidrs,

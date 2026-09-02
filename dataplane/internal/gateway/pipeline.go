@@ -755,7 +755,7 @@ func (p *Pipeline) applyPolicy(
 		return nil
 	}
 
-	bundle, err := p.policies.For(principal.Tenant, snap.GlobalVersion().Number, raw)
+	bundle, err := p.policies.For(principal.Tenant, snap.GlobalVersion().Digest, raw)
 	if err != nil {
 		// A bundle that will not decode is a configuration error, and the safe
 		// reading is to refuse: a policy an operator believes is in force and
