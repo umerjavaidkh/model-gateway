@@ -23,8 +23,17 @@ import (
 )
 
 const (
-	// DefaultStream is the key the events are appended to.
+	// DefaultStream is the key usage events are appended to.
 	DefaultStream = "gateway:usage"
+
+	// DefaultAuditStream is the key audit records are appended to.
+	//
+	// A separate stream, not a separate field on one. The two have different
+	// retention clocks, different consumers and different integrity
+	// requirements, and a single stream would force the strictest of each on
+	// everything in it: trimming a million usage events would take the audit
+	// records with them.
+	DefaultAuditStream = "gateway:audit"
 
 	// DefaultMaxLen bounds the stream so an unread backlog cannot fill Redis.
 	//
@@ -34,6 +43,17 @@ const (
 	// from before it. Sized so a consumer can be down for hours at a realistic
 	// rate before anything is dropped.
 	DefaultMaxLen = 1_000_000
+
+	// DefaultAuditMaxLen bounds the audit stream.
+	//
+	// Larger relative to its volume than the usage bound, because the two
+	// failure modes are not comparable. A dropped usage event costs a fraction
+	// of a cent of accounting accuracy; a dropped audit record is a gap in an
+	// append-only chain, and the chain exists to make gaps detectable. Redis
+	// is still a buffer and not the archive — the archive is the table the
+	// consumer writes — so this bounds it rather than pretending it is
+	// durable.
+	DefaultAuditMaxLen = 1_000_000
 
 	// PayloadField is the stream entry field the encoded event lives under.
 	PayloadField = "event"
@@ -48,20 +68,31 @@ const (
 // publishing off the request path — adding a second mechanism for that would
 // mean two places to get backpressure wrong.
 type Sink struct {
-	client  redis.UniversalClient
-	stream  string
-	maxLen  int64
-	timeout time.Duration
+	client      redis.UniversalClient
+	stream      string
+	auditStream string
+	maxLen      int64
+	auditMaxLen int64
+	timeout     time.Duration
 }
 
 // Option configures a Sink.
 type Option func(*Sink)
 
-// WithStream sets the stream key.
+// WithStream sets the usage stream key.
 func WithStream(name string) Option {
 	return func(s *Sink) {
 		if name != "" {
 			s.stream = name
+		}
+	}
+}
+
+// WithAuditStream sets the audit stream key.
+func WithAuditStream(name string) Option {
+	return func(s *Sink) {
+		if name != "" {
+			s.auditStream = name
 		}
 	}
 }
@@ -81,10 +112,12 @@ func New(client redis.UniversalClient, opts ...Option) (*Sink, error) {
 		return nil, core.New(core.CodeInternal, "a usage stream needs a redis client")
 	}
 	s := &Sink{
-		client:  client,
-		stream:  DefaultStream,
-		maxLen:  DefaultMaxLen,
-		timeout: defaultTimeout,
+		client:      client,
+		stream:      DefaultStream,
+		auditStream: DefaultAuditStream,
+		maxLen:      DefaultMaxLen,
+		auditMaxLen: DefaultAuditMaxLen,
+		timeout:     defaultTimeout,
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -95,11 +128,11 @@ func New(client redis.UniversalClient, opts ...Option) (*Sink, error) {
 // Name identifies the sink.
 func (*Sink) Name() string { return "redis-stream" }
 
-// Write appends a batch of usage events.
+// Write appends a batch of events, each to the stream for its kind.
 //
-// Audit events are skipped: they are hash-chained records with a different
-// retention clock and belong in their own stream, not interleaved with
-// measurements that get aggregated and expired.
+// One pipeline for both, because they arrive interleaved from one emitter and
+// splitting them into two round trips would double the cost of the common
+// batch to buy nothing: the streams are separate keys, not separate servers.
 func (s *Sink) Write(ctx context.Context, events []core.Event) error {
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
@@ -108,20 +141,30 @@ func (s *Sink) Write(ctx context.Context, events []core.Event) error {
 	queued := 0
 
 	for _, event := range events {
-		usage, ok := event.(core.UsageEvent)
-		if !ok {
+		var (
+			stream  string
+			maxLen  int64
+			message proto.Message
+		)
+		switch e := event.(type) {
+		case core.UsageEvent:
+			stream, maxLen, message = s.stream, s.maxLen, encode(e)
+		case core.AuditEvent:
+			stream, maxLen, message = s.auditStream, s.auditMaxLen, encodeAudit(e)
+		default:
 			continue
 		}
-		payload, err := proto.Marshal(encode(usage))
+
+		payload, err := proto.Marshal(message)
 		if err != nil {
-			return core.Wrap(core.CodeInternal, err, "encoding a usage event")
+			return core.Wrap(core.CodeInternal, err, "encoding an event")
 		}
 
 		pipe.XAdd(ctx, &redis.XAddArgs{
-			Stream: s.stream,
+			Stream: stream,
 			// Approximate trimming: exact trimming makes Redis scan, and the
 			// point is a bound rather than an exact length.
-			MaxLen: s.maxLen,
+			MaxLen: maxLen,
 			Approx: true,
 			Values: map[string]any{PayloadField: payload},
 		})
@@ -132,9 +175,25 @@ func (s *Sink) Write(ctx context.Context, events []core.Event) error {
 		return nil
 	}
 	if _, err := pipe.Exec(ctx); err != nil {
-		return core.Wrap(core.CodeUnavailable, err, "publishing usage events")
+		return core.Wrap(core.CodeUnavailable, err, "publishing events")
 	}
 	return nil
+}
+
+func encodeAudit(e core.AuditEvent) *pb.AuditEvent {
+	return &pb.AuditEvent{
+		EventId:         e.EventID,
+		RequestId:       e.RequestID,
+		TimestampUnixMs: e.Timestamp.UnixMilli(),
+		Tenant:          string(e.Tenant),
+		Actor:           e.Actor,
+		Action:          e.Action,
+		Resource:        e.Resource,
+		Outcome:         string(e.Outcome),
+		Reason:          e.Reason,
+		SourceIp:        e.SourceIP,
+		SnapshotVersion: e.SnapshotVersion,
+	}
 }
 
 func encode(e core.UsageEvent) *pb.UsageEvent {

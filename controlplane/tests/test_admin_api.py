@@ -1054,3 +1054,43 @@ def test_a_gateway_url_cannot_break_out_of_the_script() -> None:
     # rest is inert text rather than statements.
     assert hostile not in page
     assert '\\" ; alert(1) ; \\"' in page
+
+
+# --- the audit trail --------------------------------------------------------
+
+
+async def test_the_audit_trail_is_readable_and_verifiable(client: AsyncClient) -> None:
+    listed = await client.get("/v1/audit?limit=5")
+    assert listed.status_code == 200
+    assert "records" in listed.json()
+
+    verified = await client.get("/v1/audit/verify")
+    assert verified.status_code == 200
+    # An empty chain is an intact chain, and says so rather than erroring.
+    assert verified.json()["intact"] is True
+
+    summary = await client.get("/v1/audit/summary")
+    assert summary.status_code == 200
+    assert "actions" in summary.json()
+
+
+async def test_reading_the_audit_trail_needs_the_admin_token(engine: AsyncEngine) -> None:
+    # It records who was refused what, across every tenant. Serving it
+    # unauthenticated would make the audit trail its own disclosure.
+    app = create_app(AdminSettings(engine=engine, key_pepper=PEPPER, admin_token=TOKEN))
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://admin") as anonymous:
+        for path in ("/v1/audit", "/v1/audit/verify", "/v1/audit/summary"):
+            refused = await anonymous.get(path)
+            assert refused.status_code == 401, path
+
+
+async def test_the_audit_trail_has_no_write_route(client: AsyncClient) -> None:
+    # The only writer is the consumer that appends from the stream. A POST that
+    # worked would be a way to write history through the front door.
+    for method, path in (
+        ("post", "/v1/audit"),
+        ("delete", "/v1/audit/1"),
+        ("put", "/v1/audit/1"),
+    ):
+        response = await getattr(client, method)(path)
+        assert response.status_code in (404, 405), f"{method} {path} -> {response.status_code}"

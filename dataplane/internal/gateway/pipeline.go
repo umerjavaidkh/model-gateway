@@ -267,10 +267,15 @@ func (p *Pipeline) Handle(ctx context.Context, snap *core.Snapshot, req *Request
 	// event on every exit path — including the refusals, which are the ones
 	// somebody is usually looking at.
 	var stages []core.StageTiming
+	// How many values the PII stage replaced, which is one of the things that
+	// makes a request auditable. Declared here rather than at the transform,
+	// because the exit paths that need it are all above it.
+	redactions := 0
 	emit := func(err error) {
 		result.Latency = p.now().Sub(started)
 		result.Stages = stages
 		p.emitUsage(ctx, snap, req, result, deployment, false, err)
+		p.emitAudit(ctx, snap, req, result, redactions, err)
 	}
 
 	principal, err := runStage(ctx, &stages, "authenticate", func() (core.Principal, error) {
@@ -342,6 +347,7 @@ func (p *Pipeline) Handle(ctx context.Context, snap *core.Snapshot, req *Request
 	// what is logged is the redacted form and the vault mapping never reaches
 	// a durable log.
 	result.Body = pii.Restore(resp.Body, replacements)
+	redactions = len(replacements)
 	if p.vault != nil && len(replacements) > 0 {
 		p.vault.Forget(ctx, principal.Tenant, req.Meta.RequestID, replacements)
 	}
@@ -595,6 +601,7 @@ func (p *Pipeline) HandleStream(ctx context.Context, snap *core.Snapshot, req *R
 	// They did not before, so a trace or a dashboard was blind to exactly the
 	// traffic whose latency people care about most.
 	var stages []core.StageTiming
+	redactions := 0
 	emit := func(err error) {
 		r := &Result{
 			Principal:  result.Principal,
@@ -604,6 +611,7 @@ func (p *Pipeline) HandleStream(ctx context.Context, snap *core.Snapshot, req *R
 			Stages:     stages,
 		}
 		p.emitUsage(ctx, snap, req, r, result.deployment, true, err)
+		p.emitAudit(ctx, snap, req, r, redactions, err)
 	}
 
 	principal, err := runStage(ctx, &stages, "authenticate", func() (core.Principal, error) {
@@ -669,6 +677,7 @@ func (p *Pipeline) HandleStream(ctx context.Context, snap *core.Snapshot, req *R
 	// The transport restores as chunks arrive, because a placeholder can be
 	// split across them and only the transport sees the boundaries.
 	result.Restorer = pii.NewRestorer(replacements)
+	redactions = len(replacements)
 	// Finish is deferred to the caller because only the caller knows how the
 	// stream ended and what it consumed. Every early-exit path above has
 	// already emitted, so exactly one event is produced either way.
@@ -683,6 +692,7 @@ func (p *Pipeline) HandleStream(ctx context.Context, snap *core.Snapshot, req *R
 			TimeToFirstByte: ttfb,
 		}
 		p.emitUsage(ctx, snap, req, r, deployment, true, streamErr)
+		p.emitAudit(ctx, snap, req, r, redactions, streamErr)
 	}
 	return result, nil
 }

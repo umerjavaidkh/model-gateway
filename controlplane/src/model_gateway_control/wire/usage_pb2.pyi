@@ -70,3 +70,29 @@ class StageTiming(_message.Message):
     duration_ms: int
     outcome: str
     def __init__(self, name: _Optional[str] = ..., duration_ms: _Optional[int] = ..., outcome: _Optional[str] = ...) -> None: ...
+
+class AuditEvent(_message.Message):
+    __slots__ = ("event_id", "request_id", "timestamp_unix_ms", "tenant", "actor", "action", "resource", "outcome", "reason", "source_ip", "snapshot_version")
+    EVENT_ID_FIELD_NUMBER: _ClassVar[int]
+    REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
+    TIMESTAMP_UNIX_MS_FIELD_NUMBER: _ClassVar[int]
+    TENANT_FIELD_NUMBER: _ClassVar[int]
+    ACTOR_FIELD_NUMBER: _ClassVar[int]
+    ACTION_FIELD_NUMBER: _ClassVar[int]
+    RESOURCE_FIELD_NUMBER: _ClassVar[int]
+    OUTCOME_FIELD_NUMBER: _ClassVar[int]
+    REASON_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_IP_FIELD_NUMBER: _ClassVar[int]
+    SNAPSHOT_VERSION_FIELD_NUMBER: _ClassVar[int]
+    event_id: str
+    request_id: str
+    timestamp_unix_ms: int
+    tenant: str
+    actor: str
+    action: str
+    resource: str
+    outcome: str
+    reason: str
+    source_ip: str
+    snapshot_version: int
+    def __init__(self, event_id: _Optional[str] = ..., request_id: _Optional[str] = ..., timestamp_unix_ms: _Optional[int] = ..., tenant: _Optional[str] = ..., actor: _Optional[str] = ..., action: _Optional[str] = ..., resource: _Optional[str] = ..., outcome: _Optional[str] = ..., reason: _Optional[str] = ..., source_ip: _Optional[str] = ..., snapshot_version: _Optional[int] = ...) -> None: ...

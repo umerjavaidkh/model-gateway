@@ -744,3 +744,61 @@ class FineTuneJob(Base, TimestampMixin):
     #: Share of the base model's traffic mirrored while the adapter is at zero
     #: weight.
     shadow_percent: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("10"))
+
+
+class AuditRecord(Base):
+    """One decision, appended and never changed.
+
+    Append-only is a property of the code, not of the table: Postgres has no
+    "insert only" mode a migration could switch on, and a role that can write
+    can rewrite. What the schema contributes is the chain — ``prev_hash`` links
+    each row to the one before it, so a deletion or an edit is detectable by
+    anyone who recomputes it. Enforcement of *who may write* belongs to the
+    database's grants, and is deployment configuration.
+
+    ``seq`` rather than a timestamp orders the chain. Timestamps come from the
+    data plane's clock, several of them, and two workers can produce records a
+    millisecond apart in the wrong order — which would make a correct chain
+    look broken. The consumer assigns ``seq`` as it appends, and it is the only
+    writer.
+    """
+
+    __tablename__ = "audit_records"
+
+    seq: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
+
+    #: What makes redelivery safe. The stream is at-least-once, so the same
+    #: decision arrives more than once after any restart; a unique event id is
+    #: what lets the appender recognise it rather than extending the chain
+    #: twice with the same fact.
+    event_id: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+
+    #: Empty for decisions that were not a request — a key issued, a policy
+    #: published.
+    request_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+
+    tenant_id: Mapped[str] = mapped_column(String(ID_LENGTH), nullable=False, index=True)
+    #: Who did it: a key id, a user subject, or a service-account name.
+    actor: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    #: What they did. Indexed because every audit question starts by narrowing
+    #: to a kind of action.
+    action: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    #: What they did it to.
+    resource: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    #: Empty when the action was allowed, otherwise the code it was refused
+    #: with.
+    outcome: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    #: The structured half of why. Never the payload — the audit tap sits after
+    #: redaction so that this table does not become a copy of the data it
+    #: exists to protect.
+    reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    source_ip: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    #: The configuration in force when the decision was made, which is what
+    #: makes "why was this allowed in March" answerable.
+    snapshot_version: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+
+    prev_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    hash: Mapped[str] = mapped_column(String(64), nullable=False)
